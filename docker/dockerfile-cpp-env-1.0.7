@@ -1,0 +1,740 @@
+# 使用 Ubuntu 22.04 作为基础镜像
+FROM ubuntu:22.04
+
+# 避免交互式对话框
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 设置时区和语言环境变量
+ENV TZ=Asia/Shanghai
+ENV LANG=zh_CN.UTF-8
+ENV LANGUAGE=zh_CN:zh
+ENV LC_ALL=zh_CN.UTF-8
+
+# 安装目录（所有手动编译的第三方库将安装至此）
+ENV THIRD_PARTY_INSTALL_PREFIX=/usr/local/third
+
+# 设置环境变量
+ENV CMAKE_PREFIX_PATH=${THIRD_PARTY_INSTALL_PREFIX}
+ENV PKG_CONFIG_PATH=${THIRD_PARTY_INSTALL_PREFIX}/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig
+ENV LD_LIBRARY_PATH=${THIRD_PARTY_INSTALL_PREFIX}/lib
+ENV PATH=${THIRD_PARTY_INSTALL_PREFIX}/bin:${PATH}
+
+# 更新包列表并添加必要的仓库
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    wget \
+    curl \
+    gnupg \
+    && add-apt-repository universe \
+    && add-apt-repository multiverse \
+    && apt-get update
+
+# 安装基础工具链和常用软件
+RUN apt-get install -y --no-install-recommends \
+    # ===== 中文语言支持 =====
+    language-pack-zh-hans \
+    language-pack-zh-hant \
+    fonts-noto-cjk \
+    fonts-wqy-microhei \
+    fonts-wqy-zenhei \
+    # ===== 时区设置 =====
+    tzdata \
+    # ===== 基础工具链 =====
+    build-essential \
+    cmake \
+    pkg-config \
+    make \
+    # ===== 编译器 =====
+    gcc \
+    g++ \
+    clang \
+    clang-format \
+    clang-tidy \
+    clangd \
+    # ===== 调试工具 =====
+    gdb \
+    valgrind \
+    strace \
+    ltrace \
+    binutils \
+    # ===== GDB 扩展 =====
+    gdb-multiarch \
+    python3-dev \
+    python3-pip \
+    # ===== 性能分析工具 =====
+    linux-tools-common \
+    linux-tools-generic \
+    # ===== Sanitizer 相关 =====
+    libasan6 \
+    libubsan1 \
+    liblsan0 \
+    libtsan0 \
+    # ===== 版本控制 =====
+    git \
+    subversion \
+    # ===== 网络工具 =====
+    curl \
+    wget \
+    telnet \
+    net-tools \
+    iputils-ping \
+    dnsutils \
+    # ===== 压缩/解压工具 =====
+    unzip \
+    zip \
+    tar \
+    gzip \
+    bzip2 \
+    xz-utils \
+    # ===== 文本编辑器 =====
+    vim \
+    vim-gtk3 \
+    nano \
+    # ===== Vim 插件依赖 =====
+    universal-ctags \
+    cscope \
+    nodejs \
+    npm \
+    # ===== 代码分析工具 =====
+    cppcheck \
+    # ===== Python 环境 =====
+    python3 \
+    python3-pip \
+    python3-dev \
+    python3-venv \
+    # ===== 编译依赖库所需的工具 =====
+    autoconf \
+    automake \
+    libtool \
+    m4 \
+    zlib1g-dev \
+    libssl-dev \
+    # ===== MySQL 客户端开发库 =====
+    libmysqlclient-dev \
+    default-libmysqlclient-dev \
+    mysql-client \
+    libmysql++-dev \
+    # ===== 清理缓存 =====
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置时区和语言环境
+RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    dpkg-reconfigure --frontend noninteractive tzdata && \
+    locale-gen zh_CN.UTF-8 && \
+    update-locale LANG=zh_CN.UTF-8 LANGUAGE=zh_CN:zh LC_ALL=zh_CN.UTF-8
+
+# ==================== 拷贝配置文件 ====================
+# 创建配置目录
+RUN mkdir -p /root/.vim/colors /root/.vim/autoload /root/.vim/plugin /root/.config/coc
+
+# 拷贝 Vim 和 GDB 配置文件（需要在构建目录下有这些文件）
+# COPY config/.vimrc /root/.vimrc
+# COPY config/.gdbinit /root/.gdbinit
+# COPY config/.gdbinit.py /root/.gdbinit.py
+# COPY config/coc-settings.json /root/.config/coc/settings.json
+
+# 拷贝辅助脚本
+# COPY scripts/gdb-asan /usr/local/bin/
+# COPY scripts/gdb-session /usr/local/bin/
+# COPY scripts/vim-project /usr/local/bin/
+
+# ==================== 直接创建配置文件内容（避免 COPY 错误） ====================
+
+# 创建 .vimrc
+RUN cat > /root/.vimrc << 'VIMEOF'
+" ============================================
+" 基础设置
+" ============================================
+set nocompatible
+filetype plugin indent on
+syntax on
+
+" 编码设置
+set encoding=utf-8
+set fileencodings=utf-8,gbk,gb2312,gb18030,cp936
+set termencoding=utf-8
+
+" 显示设置
+set number
+set relativenumber
+set cursorline
+set cursorcolumn
+set showmatch
+set matchtime=2
+set ruler
+set showcmd
+set laststatus=2
+
+" 缩进设置
+set expandtab
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4
+set autoindent
+set smartindent
+
+" 搜索设置
+set hlsearch
+set incsearch
+set ignorecase
+set smartcase
+
+" 折叠设置
+set foldmethod=syntax
+set foldlevel=99
+
+" 文件设置
+set nobackup
+set nowritebackup
+set noswapfile
+set autoread
+
+" 剪贴板设置
+set clipboard=unnamedplus
+
+" 鼠标设置
+set mouse=a
+set mousehide
+
+" ============================================
+" 主题设置
+" ============================================
+set background=dark
+colorscheme gruvbox
+
+" ============================================
+" GDB 集成快捷键
+" ============================================
+nmap <F9> :!gdb -tui %:r<CR>
+nmap <F10> :!gdb -q -ex run %:r<CR>
+nmap <F11> :!gdb -q -ex "break main" -ex run %:r<CR>
+
+" ============================================
+" 插件管理
+" ============================================
+call plug#begin('~/.vim/plugged')
+
+" 代码补全
+Plug 'neoclide/coc.nvim', {'branch': 'release'}
+Plug 'honza/vim-snippets'
+
+" 文件浏览
+Plug 'preservim/nerdtree'
+Plug 'ryanoasis/vim-devicons'
+
+" 代码结构
+Plug 'preservim/tagbar'
+
+" Git 集成
+Plug 'tpope/vim-fugitive'
+Plug 'airblade/vim-gitgutter'
+
+" 代码格式化
+Plug 'rhysd/vim-clang-format'
+
+" 语法检查
+Plug 'dense-analysis/ale'
+
+" 状态栏美化
+Plug 'vim-airline/vim-airline'
+Plug 'vim-airline/vim-airline-themes'
+
+" 注释工具
+Plug 'tpope/vim-commentary'
+
+" 括号补全
+Plug 'jiangmiao/auto-pairs'
+
+" 快速搜索
+Plug 'ctrlpvim/ctrlp.vim'
+
+" C++ 语法增强
+Plug 'octol/vim-cpp-enhanced-highlight'
+Plug 'sheerun/vim-polyglot'
+
+" 启动画面
+Plug 'mhinz/vim-startify'
+
+call plug#end()
+
+" ============================================
+" Coc.nvim 配置
+" ============================================
+inoremap <silent><expr> <TAB>
+      \ pumvisible() ? "\<C-n>" :
+      \ <SID>check_back_space() ? "\<TAB>" :
+      \ coc#refresh()
+inoremap <expr><S-TAB> pumvisible() ? "\<C-p>" : "\<C-h>"
+
+function! s:check_back_space() abort
+  let col = col('.') - 1
+  return !col || getline('.')[col - 1]  =~# '\s'
+endfunction
+
+inoremap <silent><expr> <CR>
+      \ pumvisible() ? coc#_select_confirm() : "\<CR>"
+
+nmap <silent> gd <Plug>(coc-definition)
+nmap <silent> gy <Plug>(coc-type-definition)
+nmap <silent> gi <Plug>(coc-implementation)
+nmap <silent> gr <Plug>(coc-references)
+nmap <leader>rn <Plug>(coc-rename)
+nmap <leader>f :ClangFormat<CR>
+vmap <leader>f :ClangFormat<CR>
+
+" ============================================
+" NERDTree 配置
+" ============================================
+let NERDTreeShowHidden = 1
+let NERDTreeIgnore = ['\.git$', '\.cache$', '\.clangd$', 'node_modules']
+nmap <leader>n :NERDTreeToggle<CR>
+
+" ============================================
+" Tagbar 配置
+" ============================================
+nmap <leader>t :TagbarToggle<CR>
+let g:tagbar_width = 40
+
+" ============================================
+" ALE 配置
+" ============================================
+let g:ale_linters = {'cpp': ['clang', 'clangtidy', 'cppcheck']}
+let g:ale_fixers = {'cpp': ['clang-format']}
+let g:ale_fix_on_save = 1
+
+" ============================================
+" Airline 配置
+" ============================================
+let g:airline_theme = 'gruvbox'
+let g:airline_powerline_fonts = 1
+let g:airline#extensions#tabline#enabled = 1
+
+" ============================================
+" 快捷键映射
+" ============================================
+let mapleader = " "
+nnoremap <leader>w :w<CR>
+nnoremap <leader>q :q<CR>
+nnoremap <leader>h :nohlsearch<CR>
+
+" 窗口切换
+nnoremap <C-h> <C-w>h
+nnoremap <C-j> <C-w>j
+nnoremap <C-k> <C-w>k
+nnoremap <C-l> <C-w>l
+
+" 编译运行
+function! RunWithASan()
+    let l:file = expand("%:r")
+    execute "!g++ -fsanitize=address -g -O0 % -o " . l:file
+    execute "!ASAN_OPTIONS=detect_leaks=1 ./" . l:file
+endfunction
+
+function! RunWithoutASan()
+    let l:file = expand("%:r")
+    execute "!g++ -O2 % -o " . l:file
+    execute "!./" . l:file
+endfunction
+
+nmap <F5> :call RunWithASan()<CR>
+nmap <F6> :call RunWithoutASan()<CR>
+VIMEOF
+
+# 创建 .gdbinit
+RUN cat > /root/.gdbinit << 'GDBEOF'
+" ============================================
+" GDB 增强配置
+" ============================================
+
+" 基础设置
+set pagination off
+set confirm off
+set print pretty on
+set print array on
+set print array-indexes on
+set print elements 200
+set print null-stop
+set print vtbl on
+set print demangle on
+set demangle-style gnu-v3
+
+" 历史记录
+set history filename ~/.gdb_history
+set history save on
+set history size 10000
+set history remove-duplicates 1
+
+" 汇编风格
+set disassembly-flavor intel
+
+" 语言设置
+set language c++
+
+" ============================================
+" 颜色输出
+" ============================================
+set style address foreground yellow
+set style function foreground green
+set style variable foreground cyan
+set style filename foreground magenta
+
+" ============================================
+" 自定义命令
+" ============================================
+
+define thread_bt
+    thread apply all bt
+end
+document thread_bt
+    Show backtrace for all threads
+end
+
+define pvector
+    if $argc == 1
+        set $vec = $arg0
+        set $size = $vec._M_impl._M_finish - $vec._M_impl._M_start
+        set $capacity = $vec._M_impl._M_end_of_storage - $vec._M_impl._M_start
+        printf "Vector size = %d, capacity = %d\n", $size, $capacity
+        set $i = 0
+        while $i < $size
+            printf "  [%d]: ", $i
+            p $vec._M_impl._M_start[$i]
+            set $i++
+        end
+    else
+        printf "Usage: pvector <vector_name>\n"
+    end
+end
+
+define pstring
+    if $argc == 1
+        set $s = $arg0
+        printf "Content: \""
+        set $i = 0
+        while $i < $s._M_rep()._M_length
+            printf "%c", $s._M_rep()._M_data()[$i]
+            set $i++
+        end
+        printf "\"\n"
+    else
+        printf "Usage: pstring <string_name>\n"
+    end
+end
+
+define cond_break
+    break $arg0 if $arg1
+end
+
+define log_start
+    set logging file gdb.log
+    set logging on
+    printf "Logging started\n"
+end
+
+define log_stop
+    set logging off
+    printf "Logging stopped\n"
+end
+
+" 信号处理
+handle SIGSEGV stop print
+handle SIGABRT stop print
+handle SIGFPE stop print
+
+" 自定义提示符
+set prompt \001\033[1;32m\002(gdb)\001\033[0m\002
+
+printf "\n========================================\n"
+printf "GDB Enhanced Configuration Loaded\n"
+printf "========================================\n"
+printf "Custom commands: thread_bt, pvector, pstring, cond_break, log_start/stop\n"
+printf "========================================\n\n"
+GDBEOF
+
+# 创建 .gdbinit.py
+RUN cat > /root/.gdbinit.py << 'PYEOF'
+#!/usr/bin/env python3
+import gdb
+
+class RunWithASan(gdb.Command):
+    def __init__(self):
+        super(RunWithASan, self).__init__("run_asan", gdb.COMMAND_RUN)
+
+    def invoke(self, arg, from_tty):
+        gdb.execute("set environment ASAN_OPTIONS=detect_leaks=1:halt_on_error=0")
+        gdb.execute("run " + arg)
+
+RunWithASan()
+print("GDB Python extensions loaded")
+PYEOF
+
+# 创建 coc-settings.json
+RUN mkdir -p /root/.config/coc && \
+    cat > /root/.config/coc/settings.json << 'COCEOF'
+{
+  "clangd.path": "clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--clang-tidy",
+    "--completion-style=detailed",
+    "--header-insertion=iwyu"
+  ]
+}
+COCEOF
+
+# 创建辅助脚本
+RUN cat > /usr/local/bin/gdb-asan << 'ASANEOF'
+#!/bin/bash
+if [ -z "$1" ]; then
+    echo "用法: gdb-asan <程序名>"
+    exit 1
+fi
+gdb -ex "set environment ASAN_OPTIONS=detect_leaks=1:halt_on_error=0" -ex "run" "$1"
+ASANEOF
+
+RUN cat > /usr/local/bin/gdb-session << 'SESSIONEOF'
+#!/bin/bash
+if [ -z "$1" ]; then
+    echo "用法: gdb-session <程序名>"
+    exit 1
+fi
+SESSION_NAME=$(date +%Y%m%d_%H%M%S)_$1
+gdb -ex "set logging file $SESSION_NAME.log" \
+    -ex "set logging on" \
+    -ex "set pagination off" \
+    -ex "run" \
+    -ex "thread apply all bt" \
+    -ex "quit" "$1"
+echo "Session log saved to: $SESSION_NAME.log"
+SESSIONEOF
+
+RUN cat > /usr/local/bin/vim-project << 'PROJECTEOF'
+#!/bin/bash
+if [ -z "$1" ]; then
+    echo "用法: vim-project <项目名称>"
+    exit 1
+fi
+
+mkdir -p $1/{src,include,build}
+cd $1
+
+cat > CMakeLists.txt << 'CMEOF'
+cmake_minimum_required(VERSION 3.10)
+project($1 VERSION 1.0.0)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+
+find_package(Boost REQUIRED COMPONENTS system filesystem thread)
+find_package(Protobuf REQUIRED)
+find_package(fmt REQUIRED)
+find_package(spdlog REQUIRED)
+
+add_executable($1 src/main.cpp)
+target_link_libraries($1
+    ${Boost_LIBRARIES}
+    ${PROTOBUF_LIBRARIES}
+    fmt::fmt
+    spdlog::spdlog
+)
+
+if(ENABLE_ASAN)
+    target_compile_options($1 PRIVATE -fsanitize=address -g -O0)
+    target_link_options($1 PRIVATE -fsanitize=address)
+endif()
+CMEOF
+
+cat > src/main.cpp << 'CPPEOF'
+#include <iostream>
+#include <boost/version.hpp>
+
+int main() {
+    std::cout << "Hello, World!" << std::endl;
+    std::cout << "Boost version: " << BOOST_LIB_VERSION << std::endl;
+    return 0;
+}
+CPPEOF
+
+echo "项目 $1 创建成功!"
+echo "  cd $1"
+echo "  mkdir build && cd build"
+echo "  cmake .. && make"
+PROJECTEOF
+
+# 设置脚本执行权限
+RUN chmod +x /usr/local/bin/gdb-asan /usr/local/bin/gdb-session /usr/local/bin/vim-project
+
+# 下载 Gruvbox 配色主题
+RUN curl -fLo /root/.vim/colors/gruvbox.vim \
+    https://raw.githubusercontent.com/morhetz/gruvbox/master/colors/gruvbox.vim
+
+# 安装 Vim 插件管理器
+RUN curl -fLo /root/.vim/autoload/plug.vim --create-dirs \
+    https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
+
+# 安装 Vim 插件
+RUN vim +'PlugInstall --sync' +qa || true
+
+# 安装 Coc.nvim 扩展
+RUN mkdir -p /root/.config/coc/extensions && \
+    cd /root/.config/coc/extensions && \
+    npm install --global-style --no-bin-links --no-package-lock --only=prod \
+    coc-clangd \
+    coc-cmake \
+    coc-json \
+    coc-snippets \
+    coc-git || true
+
+# 配置 clangd
+RUN mkdir -p /root/.clangd && \
+    cat > /root/.clangd/config.yaml << 'CLANGDEOF'
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -Wall
+    - -Wextra
+    - -I/usr/local/third/include
+Index:
+  Background: Build
+CLANGDEOF
+
+# ==================== 编译安装第三方库（不带 ASan） ====================
+
+# 1. 编译安装 Boost 1.85.0
+ENV BOOST_VERSION=1.85.0
+ENV BOOST_VERSION_UNDERSCORE=1_85_0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-dev \
+    libbz2-dev \
+    libicu-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -O /tmp/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2 \
+    https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2 \
+    && tar --bzip2 -xf /tmp/boost_${BOOST_VERSION_UNDERSCORE}.tar.bz2 -C /tmp \
+    && cd /tmp/boost_${BOOST_VERSION_UNDERSCORE} \
+    && ./bootstrap.sh --prefix=${THIRD_PARTY_INSTALL_PREFIX} \
+       --with-python=/usr/bin/python3 \
+    && ./b2 -j$(nproc) \
+       --without-python \
+       --without-mpi \
+       install \
+    && rm -rf /tmp/boost_${BOOST_VERSION_UNDERSCORE}* \
+    && ldconfig
+
+
+# 2. 编译安装 Protobuf
+ENV PROTOBUF_VERSION=21.12
+ENV PROTOBUF_FULL_VERSION=3.21.12
+
+RUN wget -O /tmp/protobuf-cpp-${PROTOBUF_FULL_VERSION}.tar.gz \
+    https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-cpp-${PROTOBUF_FULL_VERSION}.tar.gz \
+    && tar -xzf /tmp/protobuf-cpp-${PROTOBUF_FULL_VERSION}.tar.gz -C /tmp \
+    && cd /tmp/protobuf-${PROTOBUF_FULL_VERSION} \
+    && ./configure --prefix=${THIRD_PARTY_INSTALL_PREFIX} \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/protobuf-${PROTOBUF_FULL_VERSION}* \
+    && ldconfig
+
+# 3. 编译安装 fmt
+ENV FMT_VERSION=10.2.1
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && git clone --branch ${FMT_VERSION} --depth 1 https://github.com/fmtlib/fmt.git /tmp/fmt \
+    && mkdir -p /tmp/fmt/build \
+    && cd /tmp/fmt/build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=${THIRD_PARTY_INSTALL_PREFIX} \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DFMT_TEST=OFF \
+    && make -j$(nproc) install \
+    && rm -rf /tmp/fmt \
+    && ldconfig
+
+# 4. 编译安装 spdlog
+ENV SPDLOG_VERSION=1.12.0
+
+RUN git clone --branch v${SPDLOG_VERSION} --depth 1 https://github.com/gabime/spdlog.git /tmp/spdlog \
+    && mkdir -p /tmp/spdlog/build \
+    && cd /tmp/spdlog/build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=${THIRD_PARTY_INSTALL_PREFIX} \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DSPDLOG_FMT_EXTERNAL=ON \
+                -DSPDLOG_BUILD_EXAMPLE=OFF \
+                -DSPDLOG_BUILD_TESTS=OFF \
+    && make -j$(nproc) install \
+    && rm -rf /tmp/spdlog \
+    && ldconfig
+
+# 5. 编译安装 hiredis
+ENV HIREDIS_VERSION=1.2.0
+
+RUN git clone --branch v${HIREDIS_VERSION} --depth 1 https://github.com/redis/hiredis.git /tmp/hiredis \
+    && mkdir -p /tmp/hiredis/build \
+    && cd /tmp/hiredis/build \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=${THIRD_PARTY_INSTALL_PREFIX} \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_SSL=OFF \
+    && make -j$(nproc) install \
+    && rm -rf /tmp/hiredis \
+    && ldconfig
+
+
+# ==================== 验证安装 ====================
+RUN echo "验证第三方库安装：" && \
+    echo "Boost: $(ls ${THIRD_PARTY_INSTALL_PREFIX}/lib/libboost_* 2>/dev/null | wc -l) 个库文件" && \
+    echo "Protobuf: $(protoc --version 2>/dev/null || echo '未找到')" && \
+    echo "fmt: $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*fmt*' 2>/dev/null | wc -l) 个文件" && \
+    echo "spdlog: $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*spdlog*' 2>/dev/null | wc -l) 个文件" && \
+    echo "hiredis: $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*hiredis*' 2>/dev/null | wc -l) 个文件" && \
+    echo "MySQL++: $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*mysqlpp*' 2>/dev/null | wc -l) 个文件"
+
+# ==================== 创建启动脚本 ====================
+RUN cat > /usr/local/bin/start.sh << 'STARTEOF'
+#!/bin/bash
+echo "=========================================="
+echo "  C++ 开发环境已启动"
+echo "=========================================="
+echo ""
+echo "已安装的组件:"
+echo "  - Boost 1.85.0 (Release)"
+echo "  - Protobuf 3.21.12 (Release)"
+echo "  - fmt 10.2.1 (Release)"
+echo "  - spdlog 1.12.0 (Release)"
+echo "  - hiredis 1.2.0 (Release)"
+echo "  - MySQL++ 3.3.0 (Release)"
+echo ""
+echo "调试工具:"
+echo "  - gdb (增强配置)"
+echo "  - gdb-asan <程序>  - 带 ASan 运行 GDB"
+echo "  - gdb-session <程序> - 录制调试会话"
+echo "  - valgrind"
+echo ""
+echo "Vim 快捷键:"
+echo "  <F5>  - 编译并运行（带 ASan）"
+echo "  <F6>  - 编译并运行（不带 ASan）"
+echo "  <F9>  - 打开 GDB (TUI)"
+echo "  <leader>n - 打开文件树"
+echo "  <leader>t - 打开代码结构"
+echo ""
+echo "快速创建项目: vim-project <项目名>"
+echo "=========================================="
+echo ""
+tail -f /dev/null
+STARTEOF
+
+RUN chmod +x /usr/local/bin/start.sh
+
+# 恢复交互式前端
+ENV DEBIAN_FRONTEND=dialog
+
+WORKDIR /workspace
+
+CMD ["/usr/local/bin/start.sh"]

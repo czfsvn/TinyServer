@@ -1,0 +1,73 @@
+---
+# 基础配置：基于 Google 风格修改，适配定制化需求
+Language:        Cpp
+BasedOnStyle:    Google
+
+# 缩进配置（核心：4空格，禁止Tab）
+IndentWidth:     4               # 缩进宽度 = 4 个空格
+TabWidth:        4               # 制表符宽度与缩进一致（避免混用）
+UseTab:          Never           # 禁止使用 Tab 缩进，保证跨平台格式统一
+ContinuationIndentWidth: 4       # 续行缩进宽度 = 4 个空格
+
+# 大括号配置（核心：全换行，Allman 风格）
+BreakBeforeBraces: Custom        # 自定义大括号换行规则
+BraceWrapping:
+  AfterClass:      true          # 类后大括号换行
+  AfterControlStatement: true    # 控制语句（if/for/while）后大括号换行
+  AfterEnum:       true          # 枚举后大括号换行
+  AfterFunction:   true          # 函数后大括号换行
+  AfterNamespace:  true          # 命名空间后大括号换行
+  AfterStruct:     true          # 结构体后大括号换行
+  AfterUnion:      true          # 联合体后大括号换行
+  AfterExternBlock: true         # 外部块后大括号换行
+  BeforeCatch:     true          # catch 前大括号换行
+  BeforeElse:      true          # else 前大括号换行
+  IndentBraces:    false         # 大括号自身不缩进
+
+# 等号对齐配置
+AlignConsecutiveAssignments: true   # 对齐连续的赋值语句
+AlignConsecutiveDeclarations: true  # 对齐连续的声明
+AlignConsecutiveBitFields: false     # 不对齐位域
+AlignAfterOpenBracket: Align        # 括号后内容对齐
+AlignArrayOfStructures: Left        # 数组结构体对齐
+
+# namespace 配置（核心：内部全部缩进）
+NamespaceIndentation: All        # 所有命名空间内部代码均缩进（包括嵌套命名空间）
+
+# 指针/引用配置（紧贴类型）
+PointerAlignment: Left           # 指针/引用符号紧贴类型（std::string* ptr，而非 std::string *ptr）
+DerivePointerAlignment: false    # 禁止自动推导指针对齐方式，强制紧贴类型
+
+# 行宽配置
+ColumnLimit:     120              # 行宽 ≤ 120 列，与项目配置一致
+ReflowComments:  false           # 不自动换行注释，保留手动注释格式
+
+# 访问修饰符配置
+AccessModifierOffset: -4         # 访问修饰符（public/private/protected）不缩进，与类内缩进对齐
+
+# 禁止短代码合并（保证格式统一）
+AllowShortFunctionsOnASingleLine: None    # 禁止短函数写在一行
+AllowShortBlocksOnASingleLine: false      # 禁止短代码块写在一行
+AllowShortIfStatementsOnASingleLine: Never # 禁止短 if 语句写在一行
+AllowShortLoopsOnASingleLine: false       # 禁止短循环写在一行
+AllowShortLambdasOnASingleLine: false     # 禁止短 lambda 表达式写在一行，确保大括号换行
+
+# 构造函数初始化列表配置（强制换行）
+BreakConstructorInitializers: BeforeColon  # 构造函数初始化列表冒号后换行
+ConstructorInitializerAllOnOneLineOrOnePerLine: true # 每个初始化成员单独一行
+ConstructorInitializerIndentWidth: 4       # 初始化列表缩进 4 个空格，与类内缩进一致
+
+# lambda 配置（强制整个另起一行 + 大括号换行）
+BreakBeforeBinaryOperators: All           # 赋值运算符后换行，使lambda整个另起一行
+LambdaBodyIndentation: OuterScope        # lambda 函数体缩进与外部作用域一致
+
+# 标准配置
+#Standard:        Cpp17           # 适配 C++17 标准，与项目配置一致
+
+# include 配置
+IncludeBlocks: Preserve          # 保持 #include 顺序不变
+SortIncludes: true               # 同一类别的 include 自动排序
+
+# 其他优化配置
+SpaceBeforeParens: ControlStatements # 控制语句（if/for/while）后加空格，括号内不加空格
+SpaceBeforeAssignmentOperators: true # 赋值运算符前加空格，提升可读性

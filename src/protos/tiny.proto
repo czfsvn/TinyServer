@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package cncpp;
+
+// 基础消息结构
+message BaseMessage {
+  uint32 message_id = 1;      // 消息ID
+  uint32 flags = 2;            // 标志位（加密、压缩等）
+  string body = 3;              // 消息体
+}
+
+// 测试消息
+message TestMessage {
+  string text = 1;              // 测试文本
+  int32 value = 2;              // 测试值
+}
+
+// 响应消息
+message ResponseMessage {
+  bool success = 1;             // 是否成功
+  string message = 2;           // 响应消息
+  int32 code = 3;               // 响应代码
+}
