@@ -61,7 +61,7 @@ namespace cncpp
     class ConfigModule
     {
     public:
-        virtual ~ConfigModule() = default;
+        virtual ~ConfigModule()                          = default;
         virtual void ReadFromTree(const pt::ptree& tree) = 0;
     };
 
@@ -83,20 +83,25 @@ namespace cncpp
         }
 
     public:
-        ConfigItem<bool> daemon;
+        ConfigItem<bool>        daemon;
         ConfigItem<std::string> app_name;
-        ConfigItem<uint16_t> async_thread_count;
-        ConfigItem<uint16_t> main_loop_interval_ms;
-        ConfigItem<uint16_t> asio_pool_size;
-        ConfigItem<uint16_t> asio_timer_interval_ms;
+        ConfigItem<uint16_t>    async_thread_count;
+        ConfigItem<uint16_t>    main_loop_interval_ms;
+        ConfigItem<uint16_t>    asio_pool_size;
+        ConfigItem<uint16_t>    asio_timer_interval_ms;
     };
 
     // 网络配置类
     class NetworkConfig : public ConfigModule
     {
     public:
-        NetworkConfig() : port(8080), host("127.0.0.1"), mode("server"), thread_count(1),
-                         server_host("127.0.0.1"), server_port(9090)
+        NetworkConfig()
+            : port(8080),
+              host("127.0.0.1"),
+              mode("server"),
+              thread_count(1),
+              server_host("127.0.0.1"),
+              server_port(9090)
         {
         }
 
@@ -111,12 +116,12 @@ namespace cncpp
         }
 
     public:
-        ConfigItem<short> port;
+        ConfigItem<short>       port;
         ConfigItem<std::string> host;
         ConfigItem<std::string> mode;
-        ConfigItem<uint16_t> thread_count;
+        ConfigItem<uint16_t>    thread_count;
         ConfigItem<std::string> server_host;  // 网关连接的服务器地址
-        ConfigItem<short> server_port;        // 网关连接的服务器端口
+        ConfigItem<short>       server_port;  // 网关连接的服务器端口
     };
 
     // 日志配置类
@@ -158,19 +163,19 @@ namespace cncpp
         }
 
     public:
-        ConfigItem<std::string> log_dir;          // 日志目录
-        ConfigItem<std::string> app_name;         // 应用名称
-        ConfigItem<std::string> log_file;         // 日志文件名
-        ConfigItem<int> retention_days;           // 保留天数（按日）
-        ConfigItem<int> retention_hours;          // 保留小时数（按小时）
-        ConfigItem<uint32_t> max_file_size;       // 单个文件最大大小（默认100MB）
-        ConfigItem<bool> enable_console;          // 是否启用控制台日志
-        ConfigItem<bool> async_mode;              // 是否启用异步模式
-        ConfigItem<uint32_t> async_queue_size;    // 异步队列大小
-        ConfigItem<std::string> console_level;    // 控制台日志级别
-        ConfigItem<std::string> file_level;       // 文件日志级别
-        ConfigItem<std::string> pattern;          // 日志格式
-        ConfigItem<std::string> rotation_policy;  // 日志滚动策略
+        ConfigItem<std::string> log_dir;           // 日志目录
+        ConfigItem<std::string> app_name;          // 应用名称
+        ConfigItem<std::string> log_file;          // 日志文件名
+        ConfigItem<int>         retention_days;    // 保留天数（按日）
+        ConfigItem<int>         retention_hours;   // 保留小时数（按小时）
+        ConfigItem<uint32_t>    max_file_size;     // 单个文件最大大小（默认100MB）
+        ConfigItem<bool>        enable_console;    // 是否启用控制台日志
+        ConfigItem<bool>        async_mode;        // 是否启用异步模式
+        ConfigItem<uint32_t>    async_queue_size;  // 异步队列大小
+        ConfigItem<std::string> console_level;     // 控制台日志级别
+        ConfigItem<std::string> file_level;        // 文件日志级别
+        ConfigItem<std::string> pattern;           // 日志格式
+        ConfigItem<std::string> rotation_policy;   // 日志滚动策略
     };
 
     // 加密配置类
@@ -193,6 +198,132 @@ namespace cncpp
 
     private:
         ConfigItem<std::string> encryption_key_;
+    };
+
+    // Gateway 配置类
+    class GatewayConfig : public ConfigModule
+    {
+    public:
+        GatewayConfig()
+            : listen_port(8080),
+              listen_host("0.0.0.0"),
+              backend_host("127.0.0.1"),
+              backend_port(9090),
+              thread_count(4),
+              max_connections(10000)
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            listen_port.ReadFromTree(tree, "gateway", "listen_port");
+            listen_host.ReadFromTree(tree, "gateway", "listen_host");
+            backend_host.ReadFromTree(tree, "gateway", "backend_host");
+            backend_port.ReadFromTree(tree, "gateway", "backend_port");
+            thread_count.ReadFromTree(tree, "gateway", "thread_count");
+            max_connections.ReadFromTree(tree, "gateway", "max_connections");
+        }
+
+    public:
+        ConfigItem<short>       listen_port;      // 网关监听端口
+        ConfigItem<std::string> listen_host;      // 网关监听地址
+        ConfigItem<std::string> backend_host;     // 后端服务器地址
+        ConfigItem<short>       backend_port;     // 后端服务器端口
+        ConfigItem<uint16_t>    thread_count;     // 工作线程数
+        ConfigItem<uint32_t>    max_connections;  // 最大连接数
+    };
+
+    // TinyServer 配置类
+    class TinyServerConfig : public ConfigModule
+    {
+    public:
+        TinyServerConfig()
+            : listen_port(9090),
+              listen_host("0.0.0.0"),
+              thread_count(4),
+              max_connections(10000),
+              heartbeat_interval_ms(30000),
+              idle_timeout_ms(60000)
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            listen_port.ReadFromTree(tree, "tinyserver", "listen_port");
+            listen_host.ReadFromTree(tree, "tinyserver", "listen_host");
+            thread_count.ReadFromTree(tree, "tinyserver", "thread_count");
+            max_connections.ReadFromTree(tree, "tinyserver", "max_connections");
+            heartbeat_interval_ms.ReadFromTree(tree, "tinyserver", "heartbeat_interval_ms");
+            idle_timeout_ms.ReadFromTree(tree, "tinyserver", "idle_timeout_ms");
+        }
+
+    public:
+        ConfigItem<short>       listen_port;            // 服务器监听端口
+        ConfigItem<std::string> listen_host;            // 服务器监听地址
+        ConfigItem<uint16_t>    thread_count;           // 工作线程数
+        ConfigItem<uint32_t>    max_connections;        // 最大连接数
+        ConfigItem<uint32_t>    heartbeat_interval_ms;  // 心跳间隔（毫秒）
+        ConfigItem<uint32_t>    idle_timeout_ms;        // 空闲超时时间（毫秒）
+    };
+
+    // Client 配置类
+    class ClientConfig : public ConfigModule
+    {
+    public:
+        ClientConfig()
+            : server_host("127.0.0.1"),
+              server_port(9090),
+              client_count(4),
+              reconnect_interval_ms(5000),
+              heartbeat_interval_ms(30000)
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            server_host.ReadFromTree(tree, "client", "server_host");
+            server_port.ReadFromTree(tree, "client", "server_port");
+            client_count.ReadFromTree(tree, "client", "client_count");
+            reconnect_interval_ms.ReadFromTree(tree, "client", "reconnect_interval_ms");
+            heartbeat_interval_ms.ReadFromTree(tree, "client", "heartbeat_interval_ms");
+        }
+
+    public:
+        ConfigItem<std::string> server_host;            // 服务器地址
+        ConfigItem<short>       server_port;            // 服务器端口
+        ConfigItem<uint16_t>    client_count;           // 客户端连接数
+        ConfigItem<uint32_t>    reconnect_interval_ms;  // 重连间隔（毫秒）
+        ConfigItem<uint32_t>    heartbeat_interval_ms;  // 心跳间隔（毫秒）
+    };
+
+    // DataServer 配置类
+    class DataServerConfig : public ConfigModule
+    {
+    public:
+        DataServerConfig()
+            : listen_port(9100),
+              listen_host("0.0.0.0"),
+              thread_count(2),
+              db_path("./data"),
+              max_cache_size(1024 * 1024 * 100)
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            listen_port.ReadFromTree(tree, "dataserver", "listen_port");
+            listen_host.ReadFromTree(tree, "dataserver", "listen_host");
+            thread_count.ReadFromTree(tree, "dataserver", "thread_count");
+            db_path.ReadFromTree(tree, "dataserver", "db_path");
+            max_cache_size.ReadFromTree(tree, "dataserver", "max_cache_size");
+        }
+
+    public:
+        ConfigItem<short>       listen_port;     // 数据服务器监听端口
+        ConfigItem<std::string> listen_host;     // 数据服务器监听地址
+        ConfigItem<uint16_t>    thread_count;    // 工作线程数
+        ConfigItem<std::string> db_path;         // 数据库文件路径
+        ConfigItem<uint32_t>    max_cache_size;  // 最大缓存大小（字节）
     };
 
     // 配置管理器模板类
@@ -294,6 +425,10 @@ namespace cncpp
                 logger_config_.ReadFromTree(tree);
                 encryption_config_.ReadFromTree(tree);
                 main_config_.ReadFromTree(tree);
+                gateway_config_.ReadFromTree(tree);
+                tinyserver_config_.ReadFromTree(tree);
+                client_config_.ReadFromTree(tree);
+                dataserver_config_.ReadFromTree(tree);
 
                 return true;
             }
@@ -333,17 +468,45 @@ namespace cncpp
             return encryption_config_.GetConfig();
         }
 
+        // 获取 Gateway 配置
+        const GatewayConfig& GetGatewayConfig() const
+        {
+            return gateway_config_.GetConfig();
+        }
+
+        // 获取 TinyServer 配置
+        const TinyServerConfig& GetTinyServerConfig() const
+        {
+            return tinyserver_config_.GetConfig();
+        }
+
+        // 获取 Client 配置
+        const ClientConfig& GetClientConfig() const
+        {
+            return client_config_.GetConfig();
+        }
+
+        // 获取 DataServer 配置
+        const DataServerConfig& GetDataServerConfig() const
+        {
+            return dataserver_config_.GetConfig();
+        }
+
         const std::string& GetConfigFile() const
         {
             return config_file_;
         }
 
     private:
-        std::string config_file_;
-        ConfigManager<NetworkConfig> network_config_;
-        ConfigManager<LoggerConfig> logger_config_;
+        std::string                     config_file_;
+        ConfigManager<NetworkConfig>    network_config_;
+        ConfigManager<LoggerConfig>     logger_config_;
         ConfigManager<EncryptionConfig> encryption_config_;
-        ConfigManager<MainConfig> main_config_;
+        ConfigManager<MainConfig>       main_config_;
+        ConfigManager<GatewayConfig>    gateway_config_;
+        ConfigManager<TinyServerConfig> tinyserver_config_;
+        ConfigManager<ClientConfig>     client_config_;
+        ConfigManager<DataServerConfig> dataserver_config_;
     };
 
 }  // namespace cncpp
@@ -353,5 +516,9 @@ namespace cncpp
 #define sLoggerConfig cncpp::Config::getMe().GetLoggerConfig()
 #define sEncryptionConfig cncpp::Config::getMe().GetEncryptionConfig()
 #define sMainConfig cncpp::Config::getMe().GetMainConfig()
+#define sGatewayConfig cncpp::Config::getMe().GetGatewayConfig()
+#define sTinyServerConfig cncpp::Config::getMe().GetTinyServerConfig()
+#define sClientConfig cncpp::Config::getMe().GetClientConfig()
+#define sDataServerConfig cncpp::Config::getMe().GetDataServerConfig()
 
 #endif  // CONFIG_H

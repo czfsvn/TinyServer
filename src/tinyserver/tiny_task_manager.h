@@ -34,30 +34,10 @@ public:
     TinyTaskPtr addTask(tcp::socket&& socket);
 
     /**
-     * @brief 移除任务（重写父类方法，添加客户端映射清理）
+     * @brief 移除任务（重写父类方法）
      * @param task_id 任务ID
      */
     void removeTask(uint32_t task_id);
-
-    /**
-     * @brief 根据客户端ID获取任务
-     * @param client_id 客户端ID
-     * @return 任务指针，如果不存在返回 nullptr
-     */
-    TinyTaskPtr getTaskByClientID(uint32_t client_id) const;
-
-    /**
-     * @brief 更新客户端ID到任务的映射
-     * @param client_id 客户端ID
-     * @param task 任务指针
-     */
-    void updateClientMapping(uint32_t client_id, TinyTaskPtr task);
-
-    /**
-     * @brief 移除客户端ID映射
-     * @param client_id 客户端ID
-     */
-    void removeClientMapping(uint32_t client_id);
 
     /**
      * @brief 获取指定IP的任务列表
@@ -66,17 +46,8 @@ public:
      */
     std::vector<TinyTaskPtr> getTasksByIP(const std::string& ip_address) const;
 
-    /**
-     * @brief 向指定客户端发送消息
-     * @param client_id 客户端ID
-     * @param message 消息
-     * @return 是否发送成功
-     */
-    bool sendMessageToClient(uint32_t client_id, const cncpp::NetworkMessage& message);
-
 private:
-    mutable std::mutex                        client_mutex_;       // 客户端映射保护锁
-    std::unordered_map<uint32_t, TinyTaskPtr> client_id_to_task_;  // client_id -> TinyTask
+    // 预留：可在此添加 TinyServer 特定的成员变量
 };
 
 #define sTinyTaskManager TinyTaskManager::getMe()

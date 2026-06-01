@@ -1,14 +1,28 @@
 #include "gate_task.h"
+#include "gate_user_manager.h"
+#include "gateway_server.h"
 #include "logger.h"
+#include "message_ids.h"
 
 GateTask::GateTask(tcp::socket&& socket, const std::string& gateway_id)
-    : cncpp::TcpTask(std::move(socket)), gateway_id_(gateway_id)
+    : cncpp::TcpTask(std::move(socket)),
+      gateway_id_(std::stoul(gateway_id)),
+      status_(TaskStatus::PENDING),
+      priority_(TaskPriority::NORMAL),
+      create_time_(std::chrono::steady_clock::now()),
+      timeout_ms_(300000)
 {
     LOG_DEBUG("GateTask created, task_id: {}, gateway_id: {}", getTaskID(), gateway_id_);
 }
 
 GateTask::~GateTask()
 {
+    LOG_DEBUG("GateTask destroyed, task_id: {}", getTaskID());
+}
+
+GateUserPtr GateTask::getUser() const
+{
+    return user_;
 }
 
 void GateTask::setUser(GateUserPtr user)
@@ -16,95 +30,133 @@ void GateTask::setUser(GateUserPtr user)
     user_ = user;
     if (user)
     {
-        user_->setGatewayID(gateway_id_);
+        user_->setGatewayID(std::to_string(gateway_id_));
         user_->setIPAddress(getClientIP());
         user_->setConnectTime();
         user_->setState(UserState::Connected);
     }
 }
 
-void GateTask::processMessage(const NetworkMessage& message)
+void GateTask::setStatus(TaskStatus status)
 {
-    LOG_DEBUG("GateTask {} received message: {}", getTaskID(), message.body_);
+    TaskStatus old_status = status_.exchange(status);
 
-    // 根据任务状态处理消息
-    cncpp::TcpTaskState current_state = getState();
-    switch (current_state)
+    if (status == TaskStatus::EXECUTING)
     {
-        case cncpp::TcpTaskState::Connected:
-            // 未认证状态，尝试认证
+        start_time_ = std::chrono::steady_clock::now();
+    }
+    else if (status == TaskStatus::COMPLETED || status == TaskStatus::FAILED || status == TaskStatus::TIMEOUT
+             || status == TaskStatus::CANCELLED)
+    {
+        end_time_ = std::chrono::steady_clock::now();
+    }
+
+    LOG_DEBUG("Task {} status changed: {} -> {}", getTaskID(), static_cast<int>(old_status), static_cast<int>(status));
+}
+
+bool GateTask::isTimeout() const
+{
+    if (status_.load() != TaskStatus::EXECUTING)
+        return false;
+
+    auto now     = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_);
+    return elapsed.count() > timeout_ms_;
+}
+
+void GateTask::startTask()
+{
+    setStatus(TaskStatus::EXECUTING);
+    LOG_INFO("Task {} started", getTaskID());
+}
+
+void GateTask::completeTask()
+{
+    setStatus(TaskStatus::COMPLETED);
+    LOG_INFO("Task {} completed", getTaskID());
+}
+
+void GateTask::failTask(const std::string& error)
+{
+    last_error_ = error;
+    setStatus(TaskStatus::FAILED);
+    LOG_ERROR("Task {} failed: {}", getTaskID(), error);
+}
+
+void GateTask::cancelTask()
+{
+    setStatus(TaskStatus::CANCELLED);
+    LOG_INFO("Task {} cancelled", getTaskID());
+}
+
+void GateTask::processMessage(const cncpp::NetworkMessage& message)
+{
+    LOG_DEBUG("GateTask {} received message: {}", getTaskID(), message.header_.message_id_);
+
+    TaskStatus current_status = status_.load();
+
+    switch (current_status)
+    {
+        case TaskStatus::PENDING:
+        case TaskStatus::INITIALIZING:
             if (processAuthentication(message))
             {
-                setState(cncpp::TcpTaskState::Ready);
-                if (user_)
-                {
-                    user_->setState(UserState::Online);
-                }
+                startTask();
             }
             break;
 
-        case cncpp::TcpTaskState::Ready:
-        case cncpp::TcpTaskState::Processing:
-            // 已认证状态，处理业务消息
-            setState(cncpp::TcpTaskState::Processing);
+        case TaskStatus::EXECUTING:
             processBusinessMessage(message);
-            setState(cncpp::TcpTaskState::Ready);
             break;
 
         default:
-            LOG_WARN("Received message in invalid state: {}", static_cast<int>(current_state));
+            LOG_WARN("Received message in invalid state: {}", static_cast<int>(current_status));
             break;
     }
 }
 
 void GateTask::onConnected()
 {
-    // 调用父类方法
     cncpp::TcpTask::onConnected();
-
-    LOG_INFO("GateTask client connected: {}", getClientIP());
+    setStatus(TaskStatus::INITIALIZING);
+    LOG_INFO("GateTask client connected: {}, task_id: {}", getClientIP(), getTaskID());
 }
 
-void GateTask::onMessage(const NetworkMessage& message)
+void GateTask::onMessage(const cncpp::NetworkMessage& message)
 {
-    // 调用父类方法
     cncpp::TcpTask::onMessage(message);
-
-    // 网关特定的消息处理
     processMessage(message);
 }
 
 void GateTask::onDisconnected()
 {
-    LOG_INFO("GateTask client disconnected: {}", getClientIP());
+    LOG_INFO("GateTask client disconnected: {}, task_id: {}", getClientIP(), getTaskID());
+
+    auto current_status = status_.load();
+    if (current_status != TaskStatus::COMPLETED && current_status != TaskStatus::CANCELLED)
+    {
+        failTask("Client disconnected");
+    }
 
     if (user_)
     {
         user_->setState(UserState::Offline);
     }
 
-    // 调用父类方法
     cncpp::TcpTask::onDisconnected();
 }
 
-bool GateTask::processAuthentication(const NetworkMessage& message)
+bool GateTask::processAuthentication(const cncpp::NetworkMessage& message)
 {
-    // 简单的认证逻辑：检查消息中是否包含 user_id（uint32_t）
-    // 实际应用中应该使用更安全的认证机制
-
-    if (message.header_.msg_type_ == MessageType::AUTH)
+    if (message.header_.message_id_ == toUint32(MessageId::AUTH))
     {
         try
         {
-            // 解析用户ID（从消息体中提取，期望是数字字符串）
-            uint32_t user_id = std::stoul(message.body_);
+            uint32_t user_id = 0;
 
-            // 创建或获取用户
-            user_ = std::make_shared<GateUser>(user_id);
-            user_->setGatewayID(gateway_id_);
-            user_->setIPAddress(getClientIP());
-            user_->setConnectTime();
-            user_->setState(UserState::Authenticated);
+            auto user = sGateUserManager.addUser(user_id);
+            setUser(user);
+            user->setState(UserState::Authenticated);
 
             LOG_INFO("User authenticated: {}", user_id);
             return true;
@@ -119,14 +171,23 @@ bool GateTask::processAuthentication(const NetworkMessage& message)
     return false;
 }
 
-void GateTask::processBusinessMessage(const NetworkMessage& message)
+void GateTask::processBusinessMessage(const cncpp::NetworkMessage& message)
 {
-    // 业务消息处理逻辑
-    // 这里可以添加具体的业务逻辑处理
-
     if (user_)
     {
         user_->incrementMessageCount();
-        LOG_DEBUG("Processing message from user {}: {}", user_->getUserID(), message.body_);
+        user_->updateLastActiveTime();
+        LOG_DEBUG("Processing message from user {}: {}", user_->getUserID(), message.header_.message_id_);
+    }
+
+    auto tiny_client = sGatewayServer.getTinyClient();
+    if (tiny_client && tiny_client->isConnected())
+    {
+        tiny_client->sendUserMessage(message);
+        LOG_DEBUG("Forwarded message to TinyServer, task_id: {}", getTaskID());
+    }
+    else
+    {
+        LOG_ERROR("TinyClient not available for task {}", getTaskID());
     }
 }

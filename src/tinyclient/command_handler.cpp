@@ -1,4 +1,5 @@
 #include "command_handler.h"
+#include "config.h"
 #include "logger.h"
 #include "tinyclient.h"
 
@@ -18,7 +19,7 @@ CommandHandler::CommandHandler(TinyClient& client) : client_(client)
 
     registerCommand("connect", [this](TinyClient& client, const std::vector<std::string>&) {
         LOG_INFO("尝试连接服务器...");
-        client.connect();
+        client.connect(sGatewayConfig.listen_host(), sGatewayConfig.listen_port());
     }, "连接到服务器");
 
     registerCommand("send", [this](TinyClient& client, const std::vector<std::string>& args) {
@@ -51,7 +52,7 @@ CommandHandler::CommandHandler(TinyClient& client) : client_(client)
 
     registerCommand("quit", [this](TinyClient& client, const std::vector<std::string>&) {
         LOG_INFO("退出客户端...");
-        client.stop();
+        // client.stop();
         exit(0);
     }, "退出客户端");
 

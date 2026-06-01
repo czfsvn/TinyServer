@@ -1,8 +1,10 @@
 #include "network.h"
 #include "config.h"
+#include "message_handler.h"
 
 namespace cncpp
 {
+
     // Session 类实现
     Session::Session(tcp::socket socket)
         : socket_(std::move(socket)),
@@ -28,7 +30,7 @@ namespace cncpp
     void Session::send(const std::string& body, uint32_t message_id)
     {
         std::unique_lock<std::mutex> lock(send_queue_mutex_);
-        send_queue_.push(std::make_pair(std::make_unique<std::string>(body), message_id));
+        send_queue_.push(std::make_tuple(std::make_unique<std::string>(body), message_id, static_cast<uint32_t>(0)));
 
         // 如果当前没有正在发送的消息，启动发送流程
         if (!is_sending_)
@@ -44,7 +46,23 @@ namespace cncpp
         std::string serialized_message = ProtobufUtil::Serialize(message);
         if (!serialized_message.empty())
         {
-            send(serialized_message, message_id);
+            // 设置protobuf标志位（第3位）
+            uint32_t additional_flags = 0x04;  // protobuf格式标志
+            send(serialized_message, message_id, additional_flags);
+        }
+    }
+
+    void Session::send(const std::string& body, uint32_t message_id, uint32_t additional_flags)
+    {
+        std::unique_lock<std::mutex> lock(send_queue_mutex_);
+        send_queue_.push(std::make_tuple(std::make_unique<std::string>(body), message_id, additional_flags));
+
+        // 如果当前没有正在发送的消息，启动发送流程
+        if (!is_sending_)
+        {
+            is_sending_ = true;
+            lock.unlock();
+            processSendQueue();
         }
     }
 
@@ -90,7 +108,7 @@ namespace cncpp
 
     void Session::processSendQueue()
     {
-        std::pair<std::unique_ptr<std::string>, uint32_t> message;
+        std::tuple<std::unique_ptr<std::string>, uint32_t, uint32_t> message;
 
         {
             std::unique_lock<std::mutex> lock(send_queue_mutex_);
@@ -107,14 +125,14 @@ namespace cncpp
         }
 
         // 处理消息发送
-        doSend(std::move(*message.first), message.second);
+        doSend(std::move(*std::get<0>(message)), std::get<1>(message), std::get<2>(message));
     }
 
-    void Session::doSend(std::string body, uint32_t message_id)
+    void Session::doSend(std::string body, uint32_t message_id, uint32_t additional_flags)
     {
         auto self(shared_from_this());
 
-        uint32_t flags = 0;
+        uint32_t flags = additional_flags;
 
         // 压缩
         if (compression_)
@@ -232,7 +250,39 @@ namespace cncpp
         }
 
         // 创建消息
-        NetworkMessage message(header, body, socket_.remote_endpoint());
+        NetworkMessage message;
+
+        // 检查是否是protobuf格式消息（flags第3位为1）
+        if (header.flags_ & 0x04)
+        {
+            // 尝试通过注册的处理器创建消息
+            auto proto_message = MessageHandlerRegistry::instance().createMessage(header.message_id_);
+
+            if (proto_message)
+            {
+                // 反序列化消息
+                if (!ProtobufUtil::Deserialize(body, *proto_message))
+                {
+                    LOG_ERROR("Failed to deserialize protobuf message, message_id={}", header.message_id_);
+                    message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
+                }
+                else
+                {
+                    LOG_DEBUG("Successfully deserialized protobuf message, message_id={}", header.message_id_);
+                    message = NetworkMessage::createProtobufMessage(header, std::move(proto_message),
+                                                                    socket_.remote_endpoint());
+                }
+            }
+            else
+            {
+                LOG_WARN("No handler registered for message_id={}, keeping raw body", header.message_id_);
+                message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
+            }
+        }
+        else
+        {
+            message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
+        }
 
         // 推送到Session自己的接收队列
         receive_queue_.push(message);

@@ -363,7 +363,7 @@ namespace cncpp
         wheel->shift();
     }
 
-    void TimerManager::timer_update()
+    void TimerManager::tick()
     {
         LOG_TRACE("[TimerManager][timer_update]");
         TimerWheelPtr wheel = getTimerWheel(1);
@@ -396,17 +396,6 @@ namespace cncpp
             return;
 
         temp_timers_.splice(temp_timers_.end(), timerlist);
-    }
-
-    void TimerManager::timer_run()
-    {
-        running_ = true;
-        while (running_)
-        {
-            cncpp::sleepfor_milliseconds(MILLI_SEC_PER_TICK / 5);
-            timer_update();
-        }
-        LOG_INFO("[TimerManager][timer_run] stopped");
     }
 
     void TimerManager::stop()

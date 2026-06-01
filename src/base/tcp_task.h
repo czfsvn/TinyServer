@@ -27,6 +27,15 @@ namespace cncpp
         Disconnected     // 已断开
     };
 
+    enum class TaskType
+    {
+        UnknownTask = 0,  // 未知任务类型
+        ClientTask  = 1,  // 客户端任务
+        GatewayTask = 2,  // 网关任务
+        TinyTask    = 3,  // TinyServer任务
+        DataTask    = 4,  // 数据任务
+    };
+
     /**
  * @brief TCP任务组件类
  * 
@@ -111,6 +120,24 @@ namespace cncpp
         }
 
         /**
+     * @brief 设置任务类型
+     * @param type 任务类型
+     */
+        void setTaskType(TaskType type)
+        {
+            task_type_ = type;
+        }
+
+        /**
+     * @brief 获取任务类型
+     * @return 任务类型
+     */
+        TaskType getTaskType() const
+        {
+            return task_type_;
+        }
+
+        /**
      * @brief 发送消息
      * @param message 网络消息
      * @return 是否发送成功
@@ -190,9 +217,10 @@ namespace cncpp
     private:
         static std::atomic<uint32_t> task_id_counter_;  // 任务ID计数器
 
-        uint32_t                  task_id_;                    // 任务唯一标识
-        std::atomic<TcpTaskState> state_{TcpTaskState::Idle};  // 任务状态
-        std::mutex                state_mutex_;                // 状态保护锁
+        uint32_t                  task_id_;                           // 任务唯一标识
+        std::atomic<TcpTaskState> state_{TcpTaskState::Idle};         // 任务状态
+        std::mutex                state_mutex_;                       // 状态保护锁
+        TaskType                  task_type_{TaskType::UnknownTask};  // 任务类型
 
         std::function<void(const cncpp::NetworkMessage&)> msg_callback_;    // 消息回调
         std::function<void()>                             close_callback_;  // 断开回调

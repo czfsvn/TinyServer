@@ -6,16 +6,9 @@
 int main(int argc, char* argv[])
 {
     // 读取配置
-    if (!sTinyServer.init(argc, argv))
+    if (!sTinyServer.run(argc, argv))
     {
         std::cerr << "Failed to read config file\n";
-        return 1;
-    }
-
-    // 创建并启动服务器
-    if (!sTinyServer.start())
-    {
-        std::cerr << "Failed to start server\n";
         return 1;
     }
 

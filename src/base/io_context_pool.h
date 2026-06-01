@@ -108,7 +108,9 @@ namespace cncpp
         };
 
         void updateTimer();
-        void startTimer();
+        void mainLoop();
+
+        void runIOContextPools();
 
     private:
         // 停止状态枚举

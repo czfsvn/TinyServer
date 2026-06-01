@@ -70,6 +70,7 @@ namespace cncpp
                 LOG_INFO("Signal handler initialized with default callback");
             }
 
+            runIOContextPools();
             return true;
         }
         catch (const std::exception& e)
@@ -127,7 +128,7 @@ namespace cncpp
         return signal_handler_.isShutdownRequested();
     }
 
-    void IOContextPool::startTimer()
+    void IOContextPool::mainLoop()
     {
         LOG_TRACE("[IOContextPool][startTimer] interval_ms_={}", interval_ms_);
         if (USING_BOOST_ASIO_TIMER)
@@ -178,7 +179,7 @@ namespace cncpp
         // 重新启动定时器，形成循环
         if (USING_BOOST_ASIO_TIMER && running_.load())
         {
-            startTimer();
+            mainLoop();
         }
     }
 
@@ -221,20 +222,8 @@ namespace cncpp
         return io_contexts_.size();
     }
 
-    void IOContextPool::run()
+    void IOContextPool::runIOContextPools()
     {
-        LOG_INFO("[IOContextPool][run]");
-        if (!initialized_)
-        {
-            throw std::runtime_error("IOContextPool not initialized");
-        }
-
-        if (running_.exchange(true))
-        {
-            LOG_WARN("IOContextPool already running");
-            return;
-        }
-
         LOG_INFO("Starting IOContextPool with " + std::to_string(io_contexts_.size()) + " threads");
 
         // 修复后的代码（第119行附近）：
@@ -257,8 +246,24 @@ namespace cncpp
                 }
             });
         }
+    }
 
-        startTimer();
+    void IOContextPool::run()
+    {
+        LOG_INFO("[IOContextPool][run]");
+        if (!initialized_)
+        {
+            throw std::runtime_error("IOContextPool not initialized");
+        }
+
+        if (running_.exchange(true))
+        {
+            LOG_WARN("IOContextPool already running");
+            return;
+        }
+
+        mainLoop();
+
         if (USING_BOOST_ASIO_TIMER)
         {
             main_io_context_->run();

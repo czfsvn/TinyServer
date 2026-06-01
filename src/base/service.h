@@ -40,7 +40,7 @@ namespace cncpp
      * @brief 初始化服务
      * @return 是否成功
      */
-        bool init(int argc, char* argv[]);
+        bool run(int argc, char* argv[]);
 
         /**
      * @brief 启动服务
@@ -72,16 +72,28 @@ namespace cncpp
      */
         void tick();
 
+        /**
+     * @brief 获取服务运行时间（毫秒）
+     * @return 服务运行时间（毫秒）
+     */
         uint64_t getUptimeMs() const
         {
             return duration_cast<milliseconds>(std::chrono::steady_clock::now() - app_start_time_).count();
         }
 
+        /**
+     * @brief 获取当前tick时间（毫秒）
+     * @return 当前时间（毫秒）
+     */
         uint64_t getNowMs() const
         {
             return duration_cast<milliseconds>(curr_tick_time_.time_since_epoch()).count();
         }
 
+        /**
+     * @brief 获取主循环间隔（毫秒）
+     * @return 主循环间隔（毫秒）
+     */
         uint64_t getMainLoopIntervalMs() const;
 
     protected:

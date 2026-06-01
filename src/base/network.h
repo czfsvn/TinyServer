@@ -8,6 +8,8 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include "compression.h"
 #include "dual_lock_free_queue.h"
@@ -29,6 +31,7 @@ namespace cncpp
         void start();
         void send(const std::string& body, uint32_t message_id = 0);
         void send(const google::protobuf::Message& message, uint32_t message_id = 0);
+        void send(const std::string& body, uint32_t message_id, uint32_t additional_flags);
         void setEncryption(std::shared_ptr<EncryptionInterface> encryption);
         void setCompression(std::shared_ptr<CompressionInterface> compression);
         void close();
@@ -43,11 +46,12 @@ namespace cncpp
         DualLockFreeQueue& getReceiveQueue();
 
     private:
-        void processSendQueue();
         void doSend(std::string body, uint32_t message_id);
+        void doSend(std::string body, uint32_t message_id, uint32_t additional_flags);
         void doReadHeader();
         void doReadBody();
         void processMessage(std::string body, MessageHeader header);
+        void processSendQueue();
 
         tcp::socket                           socket_;
         static const int                      kMaxLength = 4096;
@@ -57,14 +61,16 @@ namespace cncpp
         std::shared_ptr<CompressionInterface> compression_;
         uint32_t                              current_message_id_;
 
+        // 发送消息队列 (body, message_id, additional_flags)
+        using SendQueueItem = std::tuple<std::unique_ptr<std::string>, uint32_t, uint32_t>;
+
         // 用于读取消息
         MessageHeader     current_header_;
         std::vector<char> body_buffer_;
 
-        // 发送消息队列
-        std::queue<std::pair<std::unique_ptr<std::string>, uint32_t>> send_queue_;
-        std::mutex                                                    send_queue_mutex_;
-        bool                                                          is_sending_;
+        std::queue<SendQueueItem> send_queue_;
+        std::mutex                send_queue_mutex_;
+        bool                      is_sending_;
 
         // 接收消息队列（双无锁队列）
         DualLockFreeQueue receive_queue_;
@@ -110,5 +116,4 @@ namespace cncpp
         ErrorCallback            error_callback_;
     };
 }  // namespace cncpp
-
 #endif  // NETWORK_CONNECTION_H

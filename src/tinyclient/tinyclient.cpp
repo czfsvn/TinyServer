@@ -1,161 +1,77 @@
 #include "tinyclient.h"
-#include "io_context_pool.h"
 #include "logger.h"
+#include "message_ids.h"
 
-TinyClient::TinyClient() : host_(sNetworkConfig.host()), port_(sNetworkConfig.port())
+TinyClient::TinyClient() : cncpp::TcpClient()
 {
-    // 创建命令处理器
     command_handler_ = std::make_shared<CommandHandler>(*this);
 }
 
 TinyClient::~TinyClient()
 {
-    stop();
-}
-
-bool TinyClient::connect()
-{
-    try
-    {
-        LOG_INFO("Connecting to {}:{}", host_, port_);
-
-        // 创建 connector
-        connector_ = sIOContextPool.createConnector();
-        if (!connector_)
-        {
-            LOG_ERROR("Failed to create connector");
-            return false;
-        }
-
-        // 连接回调
-        auto connect_cb = [this](tcp::socket&& sock) {
-            onConnectSuccess(std::forward<tcp::socket>(sock));
-        };
-
-        // 错误回调
-        auto error_cb = [this](const std::string& error_msg) {
-            onConnectError(error_msg);
-        };
-
-        // 连接服务器
-        connector_->connect(host_, port_, connect_cb, error_cb);
-
-        return true;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Failed to connect: {}", e.what());
-        return false;
-    }
-}
-
-bool TinyClient::sendMessage(const std::string& message)
-{
-    if (!session_)
-    {
-        LOG_ERROR("Not connected to server");
-        return false;
-    }
-
-    try
-    {
-        // 发送消息
-        session_->send(message, 0);
-        LOG_INFO("Sent message: {}", message);
-        return true;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Failed to send message: {}", e.what());
-        return false;
-    }
+    disconnect();
 }
 
 bool TinyClient::sendAuthMessage(uint32_t user_id)
 {
-    if (!session_)
+    if (!isConnected())
     {
-        LOG_ERROR("Not connected to server");
+        LOG_ERROR("TinyClient not connected, cannot send auth message");
         return false;
     }
 
-    try
-    {
-        // 创建认证消息
-        NetworkMessage msg;
-        msg.header_.msg_type_ = MessageType::AUTH;
-        msg.header_.from_     = std::to_string(user_id);
-        msg.body_             = std::to_string(user_id);
+    cncpp::NetworkMessage msg;
+    msg.header_.message_id_  = toUint32(MessageId::AUTH);
+    msg.header_.body_length_ = sizeof(user_id);
+    msg.setBody(std::to_string(user_id));
 
-        session_->send(msg);
+    bool result = sendMessage(msg);
+    if (result)
+    {
         LOG_INFO("Sent auth message for user: {}", user_id);
-        return true;
     }
-    catch (const std::exception& e)
+    else
     {
-        LOG_ERROR("Failed to send auth message: {}", e.what());
-        return false;
-    }
-}
-
-void TinyClient::stop()
-{
-    if (session_)
-    {
-        session_->close();
-        session_.reset();
+        LOG_ERROR("Failed to send auth message for user: {}", user_id);
     }
 
-    if (connector_)
-    {
-        connector_.reset();
-    }
-
-    LOG_INFO("TinyClient stopped");
-}
-
-void TinyClient::waitForStop()
-{
-    // 等待 IO 上下文池停止
-    sIOContextPool.waitForStop();
-}
-
-void TinyClient::onConnectSuccess(tcp::socket&& sock)
-{
-    // 创建会话
-    session_ = std::make_shared<Session>(std::move(sock), nullptr);
-
-    // 启动会话
-    session_->start();
-
-    LOG_INFO("Connected to server successfully");
-}
-
-void TinyClient::onConnectError(const std::string& error_msg)
-{
-    LOG_ERROR("Connection error: {}", error_msg);
-}
-
-void TinyClient::onMessageReceived(const NetworkMessage& message)
-{
-    // LOG_INFO("Received message from server:");
-    // LOG_INFO("  Type: {}", static_cast<int>(message.header_.msg_type_));
-    // LOG_INFO("  From: {}", message.header_.from_);
-    // LOG_INFO("  To: {}", message.header_.to_);
-    // LOG_INFO("  Body: {}", message.body_);
+    return result;
 }
 
 void TinyClient::processMessages()
 {
-    if (!session_)
+    if (!getSession())
     {
         return;
     }
 
-    // 处理队列中的所有消息
-    NetworkMessage message;
-    while (session_->getReceiveQueue().tryPop(message))
+    cncpp::NetworkMessage message;
+    while (getSession()->getReceiveQueue().pop(message))
     {
         onMessageReceived(message);
     }
+}
+
+void TinyClient::onConnectSuccess()
+{
+    LOG_INFO("TinyClient connected to {}:{}", getServerHost(), getServerPort());
+}
+
+void TinyClient::onConnectError(const std::string& error_msg)
+{
+    LOG_ERROR("TinyClient connection error: {}", error_msg);
+}
+
+void TinyClient::onMessageReceived(const cncpp::NetworkMessage& message)
+{
+    if (command_handler_)
+    {
+        //todo: finish me
+        //command_handler_->executeCommand(message);
+    }
+}
+
+void TinyClient::onDisconnected()
+{
+    LOG_INFO("TinyClient disconnected from {}:{}", getServerHost(), getServerPort());
 }

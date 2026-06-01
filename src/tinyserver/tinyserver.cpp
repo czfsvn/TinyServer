@@ -123,7 +123,7 @@ void TinyServer::onConnectionCreated(tcp::socket&& sock)
 
 void TinyServer::onMessageReceived(const cncpp::NetworkMessage& message, const std::string& session_info)
 {
-    LOG_INFO("Received message: {} from {}", message.body_, session_info);
+    LOG_INFO("Received message from {}", session_info);
 }
 
 bool TinyServer::initGame()
@@ -142,7 +142,7 @@ bool TinyServer::onTick()
         g_session_manager.ProcessAllSessionQueues<cncpp::NetworkMessage>(
             [](const cncpp::NetworkMessage& message, const std::string& session_info) {
             // 处理消息
-            LOG_INFO("Received message: {} from {}", message.body_, session_info);
+            LOG_INFO("Received message from {}", session_info);
         });
         // std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

@@ -87,7 +87,7 @@ int main(int argc, char* argv[])
     // testTimerCancel();
 
     sIOContextPool.setTimerCallback([]() {
-        sTimerManager.timer_update();
+        sTimerManager.tick();
     }, sMainConfig.asio_timer_interval_ms());
 
     sIOContextPool.run();

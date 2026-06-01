@@ -108,7 +108,6 @@ namespace cncpp
 
         void addTimer(TimerPtr timer);
         void removeTimer(TimerPtr timer);
-
         //
         void runAt(const uint64_t expire, TimerCallBack cb);
         void runAfter(const uint64_t expire, TimerCallBack cb);
@@ -116,8 +115,7 @@ namespace cncpp
         void runForever(const uint64_t interval, TimerCallBack cb);
 
         void shift(const uint16_t nextlevel);
-        void timer_update();
-        void timer_run();
+        void tick();
 
         // 添加停止方法
         void stop();

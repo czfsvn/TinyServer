@@ -1,289 +1,344 @@
 #include "gateway_server.h"
+#include "Misc.h"
+#include "gate_task_manager.h"
+#include "gate_user_manager.h"
 #include "io_context_pool.h"
 #include "logger.h"
-#include "stringutil.h"
 
 GatewayServer::GatewayServer()
 {
-    // 生成唯一网关ID
-    gateway_id_ = "gateway_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-
-    // 创建管理器
-    task_manager_ = std::make_shared<GateTaskManager>();
-    user_manager_ = std::make_shared<GateUserManager>();
-
-    // 创建网关客户端（用于连接 tinyserver）
-    server_client_ = std::make_shared<GatewayClient>();
 }
 
 GatewayServer::~GatewayServer()
 {
-    Stop();
 }
 
-bool GatewayServer::Start()
+bool GatewayServer::onInit()
 {
-    if (running_)
+    LOG_INFO("GatewayServer initializing...");
+
+    if (!initAcceptor())
     {
-        LOG_WARN("GatewayServer is already running");
-        return true;
-    }
-
-    try
-    {
-        // 启动客户端监听
-        uint16_t client_port = sNetworkConfig.port();
-        LOG_INFO("Starting GatewayServer, listening on port {}", client_port);
-
-        acceptor_ = sIOContextPool.createAcceptor(
-            client_port, std::bind(&GatewayServer::onClientConnected, this, std::placeholders::_1));
-
-        if (!acceptor_)
-        {
-            LOG_ERROR("Failed to create acceptor");
-            return false;
-        }
-
-        // 连接到 tinyserver
-        if (!connectToTinyServer())
-        {
-            LOG_ERROR("Failed to connect to tinyserver");
-            return false;
-        }
-
-        running_ = true;
-        LOG_INFO("GatewayServer started successfully, gateway_id: {}", gateway_id_);
-        return true;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Failed to start GatewayServer: {}", e.what());
+        LOG_ERROR("Failed to init acceptor");
         return false;
     }
+
+    if (!initTinyClient())
+    {
+        LOG_ERROR("Failed to init TinyClient");
+        return false;
+    }
+
+    if (!initDataClient())
+    {
+        LOG_ERROR("Failed to init DataClient");
+        return false;
+    }
+
+    sGateTaskManager.startTaskScheduler();
+
+    LOG_INFO("GatewayServer initialized successfully");
+    return true;
 }
 
-void GatewayServer::Stop()
+bool GatewayServer::onStart()
 {
-    if (!running_)
+    LOG_INFO("GatewayServer starting...");
+
+    if (!connectToBackendServers())
     {
-        return;
+        LOG_ERROR("Failed to connect to backend servers");
+        return false;
     }
 
-    LOG_INFO("Stopping GatewayServer...");
-
-    // 停止客户端监听
-    if (acceptor_)
+    const uint32_t max_retry_count = 10;
+    uint32_t       retry_count     = 0;
+    bool           is_ready        = false;
+    while (retry_count < max_retry_count)
     {
-        acceptor_->Stop();
-        acceptor_.reset();
-    }
-
-    // 断开与 tinyserver 的连接
-    if (server_client_)
-    {
-        server_client_->disconnect();
-        server_client_.reset();
-    }
-
-    // 停止所有任务
-    if (task_manager_)
-    {
-        task_manager_->stopAllTasks();
-    }
-
-    running_ = false;
-    LOG_INFO("GatewayServer stopped");
-}
-
-void GatewayServer::WaitForStop()
-{
-    sIOContextPool.WaitForStop();
-}
-
-void GatewayServer::processMessages()
-{
-    // 清理超时任务和用户
-    if (task_manager_)
-    {
-        task_manager_->cleanupTimeoutTasks();
-    }
-
-    if (user_manager_)
-    {
-        user_manager_->cleanupTimeoutUsers();
-    }
-
-    LOG_DEBUG("GatewayServer processMessages - active tasks: {}, active users: {}",
-              task_manager_ ? task_manager_->getActiveTaskCount() : 0,
-              user_manager_ ? user_manager_->getOnlineUserCount() : 0);
-}
-
-void GatewayServer::onClientConnected(tcp::socket&& socket)
-{
-    try
-    {
-        // 创建任务
-        auto task = task_manager_->addTask(std::move(socket), gateway_id_);
-
-        // 启动任务
-        task->start();
-
-        LOG_INFO("New client connected, task_id: {}", task->getTaskID());
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("Failed to handle client connection: {}", e.what());
-    }
-}
-
-void GatewayServer::onTaskMessage(GateTaskPtr task, const NetworkMessage& message)
-{
-    // 更新最后活跃时间
-    task->updateLastActiveTime();
-
-    // 获取或创建用户
-    auto user = task->getUser();
-    if (!user)
-    {
-        // 尝试从消息中获取用户ID进行认证
-        if (message.header_.msg_type_ == MessageType::AUTH)
+        is_ready = checkBackendReady();
+        if (checkBackendReady())
         {
-            try
-            {
-                uint32_t user_id = std::stoul(message.body_);
-
-                // 创建或获取用户
-                user = user_manager_->addUser(user_id);
-                task->setUser(user);
-
-                // 更新用户到任务的映射
-                LOG_INFO("User authenticated: {}", user_id);
-            }
-            catch (const std::exception& e)
-            {
-                LOG_WARN("Failed to parse user_id: {}", e.what());
-            }
+            is_ready = true;
+            break;
         }
+
+        cncpp::sleepfor_seconds(3);
+        retry_count++;
     }
 
-    // 如果已认证，转发消息到服务器
-    if (user)
+    if (!is_ready)
     {
-        forwardToServer(user->getUserID(), message);
-    }
-}
-
-void GatewayServer::onTaskDisconnected(GateTaskPtr task)
-{
-    LOG_INFO("Client disconnected, task_id: {}", task->getTaskID());
-
-    // 更新用户状态
-    auto user = task->getUser();
-    if (user)
-    {
-        user->setState(UserState::Offline);
-        LOG_INFO("User disconnected: {}", user->getUserID());
-    }
-
-    // 移除任务
-    task_manager_->removeTask(task->getTaskID());
-
-    // 通知服务器用户断开
-    if (user && server_client_ && server_client_->isConnected())
-    {
-        NetworkMessage msg;
-        msg.header_.msg_type_ = MessageType::DISCONNECT;
-        msg.header_.from_     = std::to_string(user->getUserID());
-        msg.header_.to_       = "server";
-        server_client_->sendMessage(msg);
-    }
-}
-
-void GatewayServer::onServerConnected(bool success, const std::string& error_msg)
-{
-    if (success)
-    {
-        LOG_INFO("Connected to tinyserver successfully");
-
-        // 发送网关注册消息
-        NetworkMessage register_msg;
-        register_msg.header_.msg_type_ = MessageType::REGISTER;
-        register_msg.header_.from_     = gateway_id_;
-        register_msg.header_.to_       = "server";
-        register_msg.body_             = "gateway_register";
-        server_client_->sendMessage(register_msg);
+        LOG_ERROR("Failed to establish connections to backend servers after {} retries", max_retry_count);
+        return false;
     }
     else
     {
-        LOG_ERROR("Failed to connect to tinyserver: {}", error_msg);
+        LOG_INFO("Backend connections established successfully");
     }
+
+    if (!startAcceptor())
+    {
+        LOG_ERROR("Failed to start acceptor");
+        return false;
+    }
+
+    LOG_INFO("GatewayServer started successfully");
+    return true;
 }
 
-bool GatewayServer::connectToTinyServer()
+void GatewayServer::onStop()
+{
+    LOG_INFO("GatewayServer stopping...");
+
+    sGateTaskManager.stopTaskScheduler();
+
+    if (tiny_client_)
+    {
+        tiny_client_->disconnect();
+        tiny_client_.reset();
+    }
+
+    if (data_client_)
+    {
+        data_client_->disconnect();
+        data_client_.reset();
+    }
+
+    stopAcceptor();
+    closeAllSessions();
+    finalAll();
+
+    LOG_INFO("GatewayServer stopped");
+}
+
+bool GatewayServer::initTinyClient()
 {
     try
     {
-        std::string server_host = sNetworkConfig.server_host();
-        uint16_t    server_port = sNetworkConfig.server_port();
+        tiny_client_ = std::make_shared<TinyClient>();
+        if (!tiny_client_)
+        {
+            LOG_ERROR("Failed to create TinyClient");
+            return false;
+        }
 
-        LOG_INFO("Connecting to tinyserver at {}:{}", server_host, server_port);
+        tiny_client_->setGatewayID(1);
 
-        // 发起连接
-        return server_client_->connect(server_host, server_port);
+        tiny_client_->setConnectCallback(
+            std::bind(&GatewayServer::onTinyClientConnected, this, std::placeholders::_1, std::placeholders::_2));
+        tiny_client_->setMessageCallback(std::bind(&GatewayServer::onTinyClientMessage, this, std::placeholders::_1));
+        tiny_client_->setDisconnectCallback(std::bind(&GatewayServer::onTinyClientDisconnected, this));
+
+        LOG_INFO("TinyClient initialized");
+        return true;
     }
     catch (const std::exception& e)
     {
-        LOG_ERROR("Failed to connect to tinyserver: {}", e.what());
+        LOG_ERROR("Failed to initialize TinyClient: {}", e.what());
         return false;
     }
 }
 
-void GatewayServer::onServerMessage(const NetworkMessage& message)
+bool GatewayServer::initDataClient()
 {
-    LOG_DEBUG("Received message from tinyserver: {}", message.body_);
-
-    // 根据目标用户转发消息
-    if (!message.header_.to_.empty() && message.header_.to_ != "server")
+    try
     {
-        try
+        data_client_ = std::make_shared<DataClient>();
+        if (!data_client_)
         {
-            uint32_t user_id = std::stoul(message.header_.to_);
-            forwardToClient(user_id, message);
+            LOG_ERROR("Failed to create DataClient");
+            return false;
         }
-        catch (const std::exception& e)
-        {
-            LOG_WARN("Failed to parse user_id from message: {}", e.what());
-        }
+
+        data_client_->setConnectCallback(
+            std::bind(&GatewayServer::onDataClientConnected, this, std::placeholders::_1, std::placeholders::_2));
+        data_client_->setMessageCallback(std::bind(&GatewayServer::onDataClientMessage, this, std::placeholders::_1));
+        data_client_->setDisconnectCallback(std::bind(&GatewayServer::onDataClientDisconnected, this));
+
+        LOG_INFO("DataClient initialized");
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        LOG_ERROR("Failed to initialize DataClient: {}", e.what());
+        return false;
     }
 }
 
-void GatewayServer::forwardToServer(uint32_t user_id, const NetworkMessage& message)
+bool GatewayServer::connectToBackendServers()
 {
-    if (!server_client_ || !server_client_->isConnected())
+    const std::string& tiny_host = sNetworkConfig.server_host();
+    short              tiny_port = sNetworkConfig.server_port();
+
+    LOG_INFO("Connecting to TinyServer: {}:{}...", tiny_host, tiny_port);
+    bool tiny_result = tiny_client_->connect(tiny_host, tiny_port);
+
+    const std::string& data_host = sNetworkConfig.server_host();
+    short              data_port = sNetworkConfig.server_port();
+
+    LOG_INFO("Connecting to DataServer: {}:{}...", data_host, data_port);
+    bool data_result = data_client_->connect(data_host, data_port);
+
+    if (!tiny_result || !data_result)
     {
-        LOG_WARN("Not connected to tinyserver, cannot forward message");
-        return;
+        LOG_ERROR("Failed to initiate backend connections");
+        return false;
     }
 
-    NetworkMessage forward_msg = message;
-    forward_msg.header_.from_  = std::to_string(user_id);
-    forward_msg.header_.to_    = "server";
-
-    server_client_->sendMessage(forward_msg);
-    LOG_DEBUG("Forwarded message from {} to server", user_id);
+    return true;
 }
 
-void GatewayServer::forwardToClient(uint32_t user_id, const NetworkMessage& message)
+void GatewayServer::onTinyClientConnected(bool success, const std::string& error)
 {
-    if (!task_manager_)
-    {
-        LOG_WARN("Task manager not initialized");
+    if (!tiny_client_)
         return;
+
+    if (success)
+    {
+        tiny_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Connected);
+        LOG_INFO("TinyClient connected to TinyServer successfully");
+    }
+    else
+    {
+        tiny_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Disconnected);
+        LOG_ERROR("TinyClient failed to connect to TinyServer: {}", error);
+    }
+}
+
+void GatewayServer::onTinyClientDisconnected()
+{
+    if (!tiny_client_)
+        return;
+
+    tiny_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Disconnected);
+    LOG_WARN("TinyClient disconnected from TinyServer");
+}
+
+void GatewayServer::onTinyClientMessage(const cncpp::NetworkMessage& message)
+{
+    LOG_DEBUG("TinyClient received message: msg_id={}", message.header_.message_id_);
+}
+
+void GatewayServer::onDataClientConnected(bool success, const std::string& error)
+{
+    if (!data_client_)
+        return;
+
+    if (success)
+    {
+        data_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Connected);
+        LOG_INFO("DataClient connected to DataServer successfully");
+    }
+    else
+    {
+        data_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Disconnected);
+        LOG_ERROR("DataClient failed to connect to DataServer: {}", error);
+    }
+}
+
+void GatewayServer::onDataClientDisconnected()
+{
+    if (!tiny_client_)
+        return;
+
+    data_client_->setConnectionState(cncpp::TcpClient::ConnectionState::Disconnected);
+    LOG_WARN("DataClient disconnected from DataServer");
+}
+
+void GatewayServer::onDataClientMessage(const cncpp::NetworkMessage& message)
+{
+    LOG_DEBUG("DataClient received message: msg_id={}", message.header_.message_id_);
+}
+
+bool GatewayServer::checkBackendReady()
+{
+    bool tiny_ready = tiny_client_
+                      && (tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
+                          || tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
+
+    bool data_ready = data_client_
+                      && (data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
+                          || data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
+
+    return tiny_ready && data_ready;
+}
+
+void GatewayServer::stopAcceptor()
+{
+    if (acceptor_)
+    {
+        acceptor_->stop();
+        acceptor_.reset();
+        LOG_INFO("Acceptor stopped");
+    }
+}
+
+bool GatewayServer::initAcceptor()
+{
+    if (acceptor_)
+        return false;
+
+    acceptor_ = sIOContextPool.createAcceptor(
+        sNetworkConfig.port(), std::bind(&GatewayServer::onClientConnected, this, std::placeholders::_1));
+
+    if (!acceptor_)
+    {
+        LOG_ERROR("Failed to create acceptor");
+        return false;
     }
 
-    bool sent = task_manager_->sendMessageToUser(user_id, message);
-    if (!sent)
+    LOG_INFO("Acceptor initialized on port {}", sNetworkConfig.port());
+    return true;
+}
+
+bool GatewayServer::startAcceptor()
+{
+    if (!acceptor_)
+        return false;
+
+    acceptor_->start();
+    LOG_INFO("Acceptor started on port {}", sNetworkConfig.port());
+    return true;
+}
+
+void GatewayServer::closeAllSessions()
+{
+    sGateTaskManager.stopTaskScheduler();
+    LOG_INFO("All tasks stopped");
+}
+
+void GatewayServer::finalAll()
+{
+}
+
+void GatewayServer::onClientConnected(tcp::socket&& sock)
+{
+    auto task = sGateTaskManager.addTask(std::move(sock), "gateway_001");
+
+    if (task)
     {
-        LOG_WARN("Failed to forward message to user {}", user_id);
+        task->start();
+        LOG_INFO("New connection created, task_id: {}, client_ip: {}", task->getTaskID(), task->getClientIP());
     }
+}
+
+bool GatewayServer::onTick()
+{
+    static uint32_t tick_count = 0;
+
+    if (++tick_count % 100 == 0)
+    {
+        sGateTaskManager.cleanupTimeoutTasks();
+        sGateUserManager.cleanupTimeoutUsers();
+
+        bool tiny_connected = tiny_client_ && tiny_client_->isConnected();
+        bool data_connected = data_client_ && data_client_->isConnected();
+
+        LOG_DEBUG("Gateway tick - active tasks: {}, online users: {}, tiny_connected: {}, data_connected: {}",
+                  sGateTaskManager.getStats().active_tasks, sGateUserManager.getOnlineUserCount(), tiny_connected,
+                  data_connected);
+    }
+
+    return true;
 }

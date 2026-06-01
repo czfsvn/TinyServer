@@ -41,19 +41,7 @@ public:
      * @return 是否成功
      */
     bool onTick() override;
-    /*
-    // 是否正在运行
-    bool isRunning() const;
 
-    // 获取当前时间戳tick
-    uint64_t getCurrentTickMs() const;
-
-    // 设置更新间隔
-    void setUpdateIntervalMs(uint32_t interval_ms);
-
-    // 获取更新间隔
-    uint32_t getUpdateIntervalMs() const;
-*/
 private:
     void finalAll();
 

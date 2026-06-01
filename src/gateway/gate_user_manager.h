@@ -7,14 +7,14 @@
 #include <unordered_map>
 #include <vector>
 #include "gate_user.h"
+#include "singleton.h"
 
-class GateUserManager
+class GateUserManager : public cncpp::Singleton<GateUserManager>
 {
 public:
-    GateUserManager()  = default;
-    ~GateUserManager() = default;
+    GateUserManager();
+    ~GateUserManager();
 
-    // 禁止拷贝和移动
     GateUserManager(const GateUserManager&)            = delete;
     GateUserManager& operator=(const GateUserManager&) = delete;
     GateUserManager(GateUserManager&&)                 = delete;
@@ -53,9 +53,14 @@ public:
     // 批量更新用户网关ID
     void updateUserGatewayID(uint32_t user_id, const std::string& gateway_id);
 
+    // 设置缓存过期时间
+    void     setCacheExpirySeconds(uint32_t seconds);
+    uint32_t getCacheExpirySeconds() const;
+
 private:
     mutable std::mutex                        mutex_;
-    std::unordered_map<uint32_t, GateUserPtr> users_;  // user_id -> GateUser
+    std::unordered_map<uint32_t, GateUserPtr> users_;
+    uint32_t                                  cache_expiry_seconds_{300};
 };
 
-using GateUserManagerPtr = std::shared_ptr<GateUserManager>;
+#define sGateUserManager GateUserManager::getMe()

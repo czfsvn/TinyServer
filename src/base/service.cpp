@@ -20,7 +20,7 @@ namespace cncpp
         }
     }
 
-    bool Service::init(int argc, char* argv[])
+    bool Service::run(int argc, char* argv[])
     {
         std::cout << "Initializing Service..." << std::endl;
 
@@ -54,6 +54,8 @@ namespace cncpp
 
         sTimerManager.init();
 
+        start();
+
         LOG_INFO("Service initialized successfully");
         return true;
     }
@@ -80,6 +82,8 @@ namespace cncpp
         is_running_.store(true);
         sIOContextPool.run();
 
+        stop();
+
         LOG_INFO("Service started successfully");
         return true;
     }
@@ -99,7 +103,7 @@ namespace cncpp
 
         // 等待一小段时间，让正在进行的异步操作完成
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
+        /*
         // 第三步：停止 IO 上下文池（停止所有 io_context 和工作线程）
         sIOContextPool.stop();
 
@@ -111,7 +115,7 @@ namespace cncpp
         // 停止 IOContextPool
         sIOContextPool.stop();
         sIOContextPool.waitForStop();
-
+        */
         LOG_INFO("Service stopped successfully");
 
         sLogger.shutdown();
@@ -132,7 +136,7 @@ namespace cncpp
             return;
 
         curr_tick_time_ = now;
-        sTimerManager.timer_update();
+        sTimerManager.tick();
         onTick();
     }
 

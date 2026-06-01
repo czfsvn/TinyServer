@@ -30,11 +30,13 @@ namespace cncpp
         /**
      * @brief 连接状态枚举
      */
-        enum class ConnectionState
+        enum class ConnectionState : uint8_t
         {
-            Disconnected,  // 未连接
-            Connecting,    // 连接中
-            Connected      // 已连接
+            Disconnected = 0,  // 未连接
+            Connecting   = 1,  // 连接中
+            Connected    = 2,  // 已连接
+            Verifying    = 3,  // 正在验证连接
+            Okay         = 4,  // 验证通过
         };
 
         TcpClient();
@@ -104,6 +106,12 @@ namespace cncpp
         ConnectionState getConnectionState() const;
 
         /**
+     * @brief 更新连接状态
+     * @param state 新的连接状态
+     */
+        void setConnectionState(ConnectionState state);
+
+        /**
      * @brief 获取服务器地址
      * @return 服务器地址
      */
@@ -152,12 +160,6 @@ namespace cncpp
      * @brief 处理连接断开（钩子方法，子类可重写）
      */
         virtual void onDisconnected();
-
-        /**
-     * @brief 更新连接状态
-     * @param state 新的连接状态
-     */
-        void setConnectionState(ConnectionState state);
 
         /**
      * @brief 获取连接器（供子类使用）
