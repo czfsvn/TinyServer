@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库服务
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-8-0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: TinyDB
+      MYSQL_USER: user
+      MYSQL_PASSWORD: 123456
+      TZ: Asia/Shanghai
+    volumes:
+      - /home/czf/docker-datas/mysql-8-0:/var/lib/mysql
+    networks:
+      - tiny-network
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # Redis 缓存服务（可选，如有需要）
+  redis:
+    image: redis:7.2
+    container_name: redis-7-2
+    ports:
+      - "6379:6379"
+    volumes:
+      - /home/czf/docker-datas/redis-7-2:/data
+    networks:
+      - tiny-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass 123456
+
+  # C++ 开发环境服务
+  cpp-env:
+    image: ubt-cpp-env:1.0.9
+    container_name: ubt-cpp-env-1-0-9
+    volumes:
+      - /home/czf/work/docker-cpp-env:/workspace  # 挂载项目目录
+    networks:
+      - tiny-network  
+    environment:
+      - TZ=Asia/Shanghai
+      - MYSQL_HOST=mysql-8-0
+      - MYSQL_PORT=3306
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=123456
+      - MYSQL_DATABASE=TinyDB
+      - REDIS_HOST=redis-7-2
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=123456
+    depends_on:
+      - mysql
+      - redis
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    command: /usr/local/bin/start.sh
+
+# 数据卷配置
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# 网络配置
+networks:
+  tiny-network:
+    driver: bridge

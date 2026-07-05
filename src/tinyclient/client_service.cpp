@@ -3,7 +3,6 @@
 #include <iostream>
 #include "logger.h"
 
-
 ClientService::ClientService()
 {
 }
@@ -13,23 +12,17 @@ ClientService::~ClientService()
     stopCommandThread();
 }
 
-bool ClientService::init(size_t client_count)
-{
-    client_count_ = client_count;
-    return true;
-}
-
 bool ClientService::onInit()
 {
     LOG_INFO("ClientService initializing...");
 
-    if (!sTinyClientManager.init(client_count_))
+    if (!sClientManager.init(sClientConfig.client_count()))
     {
         LOG_ERROR("Failed to initialize ClientManager");
         return false;
     }
 
-    LOG_INFO("ClientService initialized with {} clients", client_count_);
+    LOG_INFO("ClientService initialized with {} clients", sClientConfig.client_count());
     return true;
 }
 
@@ -37,7 +30,7 @@ bool ClientService::onStart()
 {
     LOG_INFO("ClientService starting...");
 
-    if (!sTinyClientManager.connectAll())
+    if (!sClientManager.connectAll())
     {
         LOG_ERROR("Failed to connect clients");
         return false;
@@ -53,7 +46,7 @@ void ClientService::onStop()
 {
     LOG_INFO("ClientService stopping...");
 
-    sTinyClientManager.disconnectAll();
+    sClientManager.disconnectAll();
 
     LOG_INFO("ClientService stopped");
 }
@@ -64,10 +57,10 @@ bool ClientService::onTick()
 
     if (++tick_count % 100 == 0)
     {
-        sTinyClientManager.processAllMessages();
+        sClientManager.processAllMessages();
 
-        size_t connected = sTinyClientManager.getConnectedCount();
-        size_t total     = sTinyClientManager.getClientCount();
+        size_t connected = sClientManager.getConnectedCount();
+        size_t total     = sClientManager.getClientCount();
 
         LOG_DEBUG("ClientService tick - connected: {}/{}", connected, total);
     }
@@ -77,12 +70,12 @@ bool ClientService::onTick()
 
 TinyClientPtr ClientService::getClient(uint32_t index)
 {
-    return sTinyClientManager.getClient(index);
+    return sClientManager.getClient(index);
 }
 
 TinyClientPtr ClientService::getAvailableClient()
 {
-    return sTinyClientManager.getAvailableClient();
+    return sClientManager.getAvailableClient();
 }
 
 void ClientService::printHelp() const

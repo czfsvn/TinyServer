@@ -30,6 +30,11 @@ AlignConsecutiveDeclarations: true  # 对齐连续的声明
 AlignConsecutiveBitFields: false     # 不对齐位域
 AlignAfterOpenBracket: Align        # 括号后内容对齐
 AlignArrayOfStructures: Left        # 数组结构体对齐
+AlignEscapedNewlines: Right         # 续行字符串右对齐
+
+# 函数调用参数换行配置
+AllowAllArgumentsOnNextLine: false    # 禁止所有参数在同一行，强制换行
+AllowAllParametersOfDeclarationOnNextLine: false  # 禁止声明参数在同一行
 
 # namespace 配置（核心：内部全部缩进）
 NamespaceIndentation: All        # 所有命名空间内部代码均缩进（包括嵌套命名空间）

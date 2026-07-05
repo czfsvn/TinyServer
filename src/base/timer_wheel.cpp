@@ -196,8 +196,8 @@ namespace cncpp
         cur_slot_ = cur_slot_ % slot_size_;
         if (cur_slot_ == 0)
         {
-            LOG_TRACE("[TimerWheel][shift] level={}, curslot={}, prelevel={}, preslot={}", level_, cur_slot_,
-                      SAFE_SUB(level_, 1), getCurSlot());
+            //LOG_TRACE("[TimerWheel][shift] level={}, curslot={}, prelevel={}, preslot={}", level_, cur_slot_,
+            //          SAFE_SUB(level_, 1), getCurSlot());
             sTimerManager.shift(level_ + 1);
         }
     }
@@ -212,8 +212,8 @@ namespace cncpp
         cur_slot_ = cur_slot_ % slot_size_;
         if (cur_slot_ == 0)
         {
-            LOG_INFO("[TimerWheel][shift] level={}, curslot={}, prelevel={}, preslot={}", level_, cur_slot_,
-                     SAFE_SUB(level_, 1), getCurSlot());
+            //LOG_TRACE("[TimerWheel][shift] level={}, curslot={}, prelevel={}, preslot={}", level_, cur_slot_,
+            //          SAFE_SUB(level_, 1), getCurSlot());
             sTimerManager.shift(level_ + 1);
         }
     }

@@ -4,6 +4,12 @@
 
 namespace cncpp
 {
+    enum class SeviceType : uint32_t
+    {
+        AUTH   = 4000,  // 认证
+        VERIFY = 4001,  // 验证
+    };
+
     template <typename T>
     std::string toStr(const T& t)
     {

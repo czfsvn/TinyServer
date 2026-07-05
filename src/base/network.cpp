@@ -12,7 +12,6 @@ namespace cncpp
           total_bytes_written_(0),
           encryption_(nullptr),
           compression_(nullptr),
-          current_message_id_(0),
           is_sending_(false)
     {
     }
@@ -151,7 +150,7 @@ namespace cncpp
         // 构建消息头
         MessageHeader header;
         header.body_length_ = static_cast<uint32_t>(body.size());
-        header.message_id_  = message_id > 0 ? message_id : current_message_id_++;
+        header.message_id_  = message_id;
         header.flags_       = flags;
 
         // 构建完整消息

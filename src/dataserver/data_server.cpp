@@ -2,7 +2,9 @@
 #include "config_manager.h"
 #include "data_processor.h"
 #include "data_task_manager.h"
+#include "io_context_pool.h"
 #include "logger.h"
+#include "mysql_conn.h"
 
 DataServer::DataServer()
 {
@@ -17,13 +19,7 @@ bool DataServer::onInit()
 {
     LOG_INFO("DataServer initializing...");
 
-    sDataConfig.loadConfig("config/dataserver.ini");
-
-    if (!initMySQLPool())
-    {
-        LOG_ERROR("Failed to initialize MySQL connection pool");
-        return false;
-    }
+    MySqlConnectPool::getMe().init(sMysqlConfig);
 
     if (!sDataProcessor.init())
     {
@@ -41,31 +37,14 @@ bool DataServer::onInit()
     return true;
 }
 
-bool DataServer::initMySQLPool()
-{
-    cncpp::MySQLConnectionPool::ConnectionConfig config;
-    config.host               = sDataConfig.mysql_host;
-    config.port               = sDataConfig.mysql_port;
-    config.user               = sDataConfig.mysql_user;
-    config.password           = sDataConfig.mysql_password;
-    config.database           = sDataConfig.mysql_database;
-    config.max_connections    = sDataConfig.mysql_max_connections;
-    config.connection_timeout = sDataConfig.mysql_connection_timeout;
-    config.read_timeout       = sDataConfig.mysql_read_timeout;
-    config.write_timeout      = sDataConfig.mysql_write_timeout;
-
-    LOG_INFO("Initializing MySQL pool: {}:{}/{}", config.host, config.port, config.database);
-    return sMySQLPool.init(config);
-}
-
 bool DataServer::initAcceptor()
 {
     try
     {
-        port_     = sDataConfig.port;
-        acceptor_ = std::make_shared<cncpp::Acceptor>(
-            getIoContext(), port_, std::bind(&DataServer::onConnectionCreated, this, std::placeholders::_1));
-        LOG_INFO("Acceptor initialized on port {}", port_);
+        acceptor_ = sIOContextPool.createAcceptor(
+            sDataServerConfig.listen_port(), std::bind(&DataServer::onConnectionCreated, this, std::placeholders::_1));
+
+        LOG_INFO("Acceptor initialized on port {}", sDataServerConfig.listen_port());
         return true;
     }
     catch (const std::exception& e)
@@ -83,7 +62,9 @@ bool DataServer::onStart()
         return false;
     }
 
-    LOG_INFO("DataServer started successfully on port {}", port_);
+    checkMysql();
+
+    LOG_INFO("DataServer started successfully on port {}", sDataServerConfig.listen_port());
     return true;
 }
 
@@ -103,7 +84,6 @@ void DataServer::onStop()
 
     stopAcceptor();
     closeAllSessions();
-    sMySQLPool.close();
 
     LOG_INFO("DataServer stopped");
 }
@@ -128,8 +108,7 @@ bool DataServer::onTick()
     static uint32_t tick_count = 0;
     if (++tick_count % 100 == 0)
     {
-        LOG_DEBUG("DataServer tick, active connections: {}, pool size: {}", sDataTaskManager.getActiveTaskCount(),
-                  sMySQLPool.getActiveConnections());
+        LOG_DEBUG("DataServer tick, active connections: {}", sDataTaskManager.getActiveTaskCount());
     }
     return true;
 }
@@ -142,4 +121,11 @@ void DataServer::onConnectionCreated(tcp::socket&& sock)
         task->start();
         LOG_INFO("New connection created, task_id: {}, client_ip: {}", task->getTaskID(), task->getClientIP());
     }
+}
+
+void DataServer::checkMysql()
+{
+    ScopedMySqlConn con;
+    const uint32_t  max_pack_size = con->getMaxMysqlPacketSize();
+    LOG_INFO("MySQL connection max_pack_size={}", max_pack_size);
 }

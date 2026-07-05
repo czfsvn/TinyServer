@@ -21,3 +21,7 @@ message ResponseMessage {
   string message = 2;           // 响应消息
   int32 code = 3;               // 响应代码
 }
+
+message VerifyMessage {
+  uint32 user_id = 1;           // 用户ID
+}

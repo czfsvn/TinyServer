@@ -59,7 +59,6 @@ namespace cncpp
         std::size_t                           total_bytes_written_;
         std::shared_ptr<EncryptionInterface>  encryption_;
         std::shared_ptr<CompressionInterface> compression_;
-        uint32_t                              current_message_id_;
 
         // 发送消息队列 (body, message_id, additional_flags)
         using SendQueueItem = std::tuple<std::unique_ptr<std::string>, uint32_t, uint32_t>;

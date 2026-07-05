@@ -6,7 +6,6 @@
 #include "service.h"
 #include "singleton.h"
 
-
 class ClientService : public cncpp::Service, public cncpp::Singleton<ClientService>
 {
 public:
@@ -19,8 +18,6 @@ public:
     ClientService& operator=(const ClientService&) = delete;
     ClientService(ClientService&&)                 = delete;
     ClientService& operator=(ClientService&&)      = delete;
-
-    bool init(size_t client_count = DEFAULT_CLIENT_COUNT);
 
     TinyClientPtr getClient(uint32_t index);
     TinyClientPtr getAvailableClient();

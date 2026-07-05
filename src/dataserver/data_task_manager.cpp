@@ -1,4 +1,5 @@
 #include "data_task_manager.h"
+#include "data_task.h"
 #include "logger.h"
 
 DataTaskPtr DataTaskManager::addTask(tcp::socket&& socket)
@@ -22,7 +23,7 @@ void DataTaskManager::removeTask(uint32_t task_id)
 
 std::vector<DataTaskPtr> DataTaskManager::getTasksByIP(const std::string& ip_address) const
 {
-    auto all_tasks = getAllTasks();
+    auto                     all_tasks = getAllTasks();
     std::vector<DataTaskPtr> result;
     for (const auto& task : all_tasks)
     {

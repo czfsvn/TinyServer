@@ -70,7 +70,7 @@ bool TinyServer::initAcceptor()
     if (acceptor_)
         return false;
 
-    acceptor_ = sIOContextPool.createAcceptor(sNetworkConfig.port(),
+    acceptor_ = sIOContextPool.createAcceptor(sTinyServerConfig.listen_port(),
                                               std::bind(&TinyServer::onConnectionCreated, this, std::placeholders::_1));
     if (!acceptor_)
     {
@@ -87,6 +87,7 @@ bool TinyServer::startAcceptor()
         return false;
 
     acceptor_->start();
+    LOG_INFO("Acceptor started on port {}", sTinyServerConfig.listen_port());
     return true;
 }
 
@@ -149,7 +150,7 @@ bool TinyServer::onTick()
 
     // 使用单例任务管理器遍历任务（示例）
     size_t active_count = sTinyTaskManager.getActiveTaskCount();
-    LOG_DEBUG("Active tasks: {}", active_count);
+    // LOG_DEBUG("Active tasks: {}", active_count);
 
     return true;
 }

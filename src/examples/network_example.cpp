@@ -212,10 +212,7 @@ int main(int argc, char* argv[])
     }
 
     // 从配置文件中读取参数，命令行参数优先
-    std::string mode        = sConfig.GetNetworkConfig().mode();
-    bool        daemon_mode = sConfig.GetMainConfig().daemon();
-    int         port        = sConfig.GetNetworkConfig().port();
-    std::string host        = sConfig.GetNetworkConfig().host();
+    bool daemon_mode = sConfig.GetMainConfig().daemon();
 
     // 初始化日志记录器
     sLoggerConfig.app_name.set(sConfig.GetMainConfig().app_name());

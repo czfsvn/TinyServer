@@ -3,86 +3,21 @@
 #include "logger.h"
 #include "tinyclient.h"
 
+// 命令注册宏，简化语法
+#define REGISTER_COMMAND(name, method, help) \
+    registerCommand(name, std::bind(&CommandHandler::method, this, std::placeholders::_1, std::placeholders::_2), help)
+
 CommandHandler::CommandHandler(TinyClient& client) : client_(client)
 {
     // 注册内置命令
-    registerCommand("help", [this](TinyClient&, const std::vector<std::string>& args) {
-        if (args.size() > 0)
-        {
-            showHelp(args[0]);
-        }
-        else
-        {
-            listCommands();
-        }
-    }, "显示帮助信息，用法: help [命令名]");
-
-    registerCommand("connect", [this](TinyClient& client, const std::vector<std::string>&) {
-        LOG_INFO("尝试连接服务器...");
-        client.connect(sGatewayConfig.listen_host(), sGatewayConfig.listen_port());
-    }, "连接到服务器");
-
-    registerCommand("send", [this](TinyClient& client, const std::vector<std::string>& args) {
-        if (args.empty())
-        {
-            LOG_WARN("请提供要发送的消息内容，用法: send <消息>");
-            return;
-        }
-        std::string message;
-        for (size_t i = 0; i < args.size(); ++i)
-        {
-            if (i > 0)
-                message += " ";
-            message += args[i];
-        }
-        LOG_INFO("发送消息: {}", message);
-        client.sendMessage(message);
-    }, "发送消息到服务器，用法: send <消息内容>");
-
-    registerCommand("auth", [this](TinyClient& client, const std::vector<std::string>& args) {
-        if (args.empty())
-        {
-            LOG_WARN("请提供用户ID，用法: auth <用户ID>");
-            return;
-        }
-        std::string user_id = args[0];
-        LOG_INFO("发送认证消息，用户ID: {}", user_id);
-        client.sendMessage(user_id);
-    }, "发送认证消息，用法: auth <用户ID>");
-
-    registerCommand("quit", [this](TinyClient& client, const std::vector<std::string>&) {
-        LOG_INFO("退出客户端...");
-        // client.stop();
-        exit(0);
-    }, "退出客户端");
-
-    registerCommand("ping", [this](TinyClient& client, const std::vector<std::string>&) {
-        LOG_INFO("发送 ping 消息");
-        client.sendMessage("ping");
-    }, "发送 ping 消息到服务器");
-
-    registerCommand("echo", [this](TinyClient& client, const std::vector<std::string>& args) {
-        if (args.empty())
-        {
-            LOG_WARN("请提供要回显的内容，用法: echo <内容>");
-            return;
-        }
-        std::string content;
-        for (size_t i = 0; i < args.size(); ++i)
-        {
-            if (i > 0)
-                content += " ";
-            content += args[i];
-        }
-        LOG_INFO("发送 echo 消息: {}", content);
-        client.sendMessage("echo " + content);
-    }, "发送 echo 消息到服务器，用法: echo <内容>");
-
-    registerCommand("status", [this](TinyClient&, const std::vector<std::string>&) {
-        LOG_INFO("客户端状态检查...");
-        // 这里可以添加状态检查逻辑
-        LOG_INFO("状态: 运行中");
-    }, "显示客户端状态");
+    REGISTER_COMMAND("help", handleHelp, "显示帮助信息，用法: help [命令名]");
+    REGISTER_COMMAND("connect", handleConnect, "连接到服务器");
+    REGISTER_COMMAND("send", handleSend, "发送消息到服务器，用法: send <消息内容>");
+    REGISTER_COMMAND("auth", handleAuth, "发送认证消息，用法: auth <用户ID>");
+    REGISTER_COMMAND("quit", handleQuit, "退出客户端");
+    REGISTER_COMMAND("ping", handlePing, "发送 ping 消息到服务器");
+    REGISTER_COMMAND("echo", handleEcho, "发送 echo 消息到服务器，用法: echo <内容>");
+    REGISTER_COMMAND("status", handleStatus, "显示客户端状态");
 }
 
 void CommandHandler::registerCommand(const std::string& name, CommandCallback callback, const std::string& help)
@@ -142,6 +77,90 @@ void CommandHandler::listCommands() const
     {
         LOG_INFO("  {} - {}", pair.first, pair.second.second);
     }
+}
+
+void CommandHandler::handleHelp(TinyClient&, const std::vector<std::string>& args)
+{
+    if (args.size() > 0)
+    {
+        showHelp(args[0]);
+    }
+    else
+    {
+        listCommands();
+    }
+}
+
+void CommandHandler::handleConnect(TinyClient& client, const std::vector<std::string>&)
+{
+    LOG_INFO("尝试连接服务器...");
+    client.connect(sGatewayConfig.listen_host(), sGatewayConfig.listen_port());
+}
+
+void CommandHandler::handleSend(TinyClient& client, const std::vector<std::string>& args)
+{
+    if (args.empty())
+    {
+        LOG_WARN("请提供要发送的消息内容，用法: send <消息>");
+        return;
+    }
+    std::string message;
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        if (i > 0)
+            message += " ";
+        message += args[i];
+    }
+    LOG_INFO("发送消息: {}", message);
+    client.sendMessage(message);
+}
+
+void CommandHandler::handleAuth(TinyClient& client, const std::vector<std::string>& args)
+{
+    if (args.empty())
+    {
+        LOG_WARN("请提供用户ID，用法: auth <用户ID>");
+        return;
+    }
+    std::string user_id = args[0];
+    LOG_INFO("发送认证消息，用户ID: {}", user_id);
+    client.sendMessage(user_id);
+}
+
+void CommandHandler::handleQuit(TinyClient&, const std::vector<std::string>&)
+{
+    LOG_INFO("退出客户端...");
+    exit(0);
+}
+
+void CommandHandler::handlePing(TinyClient& client, const std::vector<std::string>&)
+{
+    LOG_INFO("发送 ping 消息");
+    client.sendMessage("ping");
+}
+
+void CommandHandler::handleEcho(TinyClient& client, const std::vector<std::string>& args)
+{
+    if (args.empty())
+    {
+        LOG_WARN("请提供要回显的内容，用法: echo <内容>");
+        return;
+    }
+    std::string content;
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        if (i > 0)
+            content += " ";
+        content += args[i];
+    }
+    LOG_INFO("发送 echo 消息: {}", content);
+    client.sendMessage("echo " + content);
+}
+
+void CommandHandler::handleStatus(TinyClient&, const std::vector<std::string>&)
+{
+    LOG_INFO("客户端状态检查...");
+    LOG_INFO("状态: 运行中");
 }
 
 std::vector<std::string> CommandHandler::splitCommand(const std::string& input) const

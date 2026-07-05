@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CampofficialPromote>
+	<funcopen open="uint32_t" allzone="uint32_t" openzones="std::string" addexpoitendtime="std::string" seasonawardopen="uint32_t" />
+	<exploitlimit daylimit="uint32_t" weeklimit="uint32_t" daysublimit="uint32_t" weeksublimit="uint32_t" />
+	<toplist open="uint32_t" round="uint32_t" maxshow="uint32_t" fromtime="std::string" totime="std::string" />
+	<appointofficial open="uint32_t" minofficialid="uint32_t" minexploit="uint32_t" reappointcd="uint32_t" appointprotecttime="uint32_t">
+		<extraofficial officialid="uint32_t" officialname="std::string" maxnum="uint32_t" container_="map" key_="officialid" />
+	</appointofficial>
+</CampofficialPromote>

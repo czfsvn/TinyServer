@@ -12,6 +12,7 @@ ENV LC_ALL=zh_CN.UTF-8
 
 # 安装目录（所有手动编译的第三方库将安装至此）
 ENV THIRD_PARTY_INSTALL_PREFIX=/usr/local/third
+ENV MYSQLPP_VERSION=3.3.0
 
 # 设置环境变量
 ENV CMAKE_PREFIX_PATH=${THIRD_PARTY_INSTALL_PREFIX}
@@ -114,9 +115,22 @@ RUN apt-get install -y --no-install-recommends \
     default-libmysqlclient-dev \
     mysql-client \
     libmysql++-dev \
+    # ===== Redis 客户端工具 =====
+    redis-tools \
     # ===== 清理缓存 =====
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN wget -O /tmp/mysql++-${MYSQLPP_VERSION}.tar.gz \
+    https://tangentsoft.com/mysqlpp/releases/mysql++-${MYSQLPP_VERSION}.tar.gz \
+    && tar -xzf /tmp/mysql++-${MYSQLPP_VERSION}.tar.gz -C /tmp \
+    && cd /tmp/mysql++-${MYSQLPP_VERSION} \
+    && ./configure --prefix=${THIRD_PARTY_INSTALL_PREFIX} \
+                   --with-mysql=/usr \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/mysql++-${MYSQLPP_VERSION}* \
+    && ldconfig
 
 # 配置时区和语言环境
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
@@ -139,6 +153,76 @@ RUN mkdir -p /root/.vim/colors /root/.vim/autoload /root/.vim/plugin /root/.conf
 # COPY scripts/gdb-asan /usr/local/bin/
 # COPY scripts/gdb-session /usr/local/bin/
 # COPY scripts/vim-project /usr/local/bin/
+
+# 创建 .bashrc 添加常用 alias
+RUN cat >> /root/.bashrc << 'BASHREOF'
+
+# ==================== 常用 alias ====================
+alias tailf='tail -f'
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias grep='grep --color=auto'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+
+# 系统监控
+alias ports='netstat -tulanp'
+alias meminfo='free -h'
+alias diskinfo='df -h'
+
+# 网络
+alias ping1='ping -c 1'
+alias curlj='curl -s | python3 -m json.tool'
+
+# 文件操作
+alias copy='cp -i'
+alias move='mv -i'
+
+# 编译运行
+alias makec='cmake .. && cmake --build .'
+alias run='./app'
+
+# Docker
+alias dps='docker ps'
+alias dpsa='docker ps -a'
+alias di='docker images'
+alias dex='docker exec -it'
+
+# 进程
+alias pst='ps aux | grep'
+alias kill9='kill -9'
+
+# ==================== Git alias ====================
+alias gs='git status'
+alias ga='git add'
+alias gc='git commit'
+alias gp='git push'
+alias gl='git log --oneline --graph --decorate'
+alias gd='git diff'
+alias gco='git checkout'
+alias gb='git branch'
+alias gm='git merge'
+alias gr='git rebase'
+alias gst='git stash'
+alias gstp='git stash pop'
+
+# ==================== CMake alias ====================
+alias cm='cmake ..'
+alias cma='cmake .. -DCMAKE_BUILD_TYPE=Debug'
+alias cmr='cmake .. -DCMAKE_BUILD_TYPE=Release'
+alias cb='cmake --build .'
+alias cn='cmake --build . -- -j$(nproc)'
+alias cclean='rm -rf build && mkdir build && cd build'
+
+# Redis + mysql
+alias cli-mysql='mysql -h mysql-8-0 -P 3306 -u user -p123456'
+alias cli-redis='redis-cli -h redis-7-2 -p 6379 -a 123456'
+
+export TZ=Asia/Shanghai
+
+BASHREOF
 
 # ==================== 直接创建配置文件内容（避免 COPY 错误） ====================
 

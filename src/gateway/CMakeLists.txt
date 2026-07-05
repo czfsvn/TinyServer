@@ -40,5 +40,5 @@
 
 file(GLOB SOURCES "*.cpp")
 add_executable(gateserver ${SOURCES})
-target_link_libraries(gateserver PRIVATE base)
+target_link_libraries(gateserver PRIVATE base xmlconfigs)
 

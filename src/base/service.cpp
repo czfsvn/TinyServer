@@ -8,16 +8,17 @@ namespace cncpp
 {
     Service::Service()
     {
-        LOG_DEBUG("Service constructor");
+        std::cout << "Service constructor" << std::endl;
     }
 
     Service::~Service()
     {
-        LOG_DEBUG("Service destructor");
+        std::cout << "Service destructor" << std::endl;
         if (is_running_.load())
         {
             stop();
         }
+        sLogger.shutdown();
     }
 
     bool Service::run(int argc, char* argv[])
@@ -56,7 +57,7 @@ namespace cncpp
 
         start();
 
-        LOG_INFO("Service initialized successfully");
+        // LOG_INFO("Service initialized successfully");
         return true;
     }
 
@@ -81,10 +82,9 @@ namespace cncpp
 
         is_running_.store(true);
         sIOContextPool.run();
+        // stop();
 
-        stop();
-
-        LOG_INFO("Service started successfully");
+        // LOG_INFO("Service started successfully");
         return true;
     }
 
@@ -116,10 +116,11 @@ namespace cncpp
         sIOContextPool.stop();
         sIOContextPool.waitForStop();
         */
+
+        sIOContextPool.cleanup();
+        sTimerManager.stop();
         LOG_INFO("Service stopped successfully");
-
-        sLogger.shutdown();
-
+        // sLogger.shutdown();
         is_running_ = false;
     }
 

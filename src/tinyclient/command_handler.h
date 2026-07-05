@@ -36,6 +36,16 @@ public:
     void listCommands() const;
 
 private:
+    // 命令处理成员函数
+    void handleHelp(TinyClient& client, const std::vector<std::string>& args);
+    void handleConnect(TinyClient& client, const std::vector<std::string>& args);
+    void handleSend(TinyClient& client, const std::vector<std::string>& args);
+    void handleAuth(TinyClient& client, const std::vector<std::string>& args);
+    void handleQuit(TinyClient& client, const std::vector<std::string>& args);
+    void handlePing(TinyClient& client, const std::vector<std::string>& args);
+    void handleEcho(TinyClient& client, const std::vector<std::string>& args);
+    void handleStatus(TinyClient& client, const std::vector<std::string>& args);
+
     // 分割命令行参数
     std::vector<std::string> splitCommand(const std::string& input) const;
 

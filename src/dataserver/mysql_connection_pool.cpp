@@ -1,3 +1,4 @@
+#if 0
 #include "mysql_connection_pool.h"
 #include "logger.h"
 
@@ -164,3 +165,4 @@ namespace cncpp
     }
 
 }  // namespace cncpp
+#endif

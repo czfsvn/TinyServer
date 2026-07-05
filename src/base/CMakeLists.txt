@@ -11,6 +11,8 @@ add_library(base STATIC ${BASE_SOURCES})
 target_include_directories(base
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${MYSQL_INCLUDE_DIR}
+        ${MYSQLPP_INCLUDE_DIR}
 )
 
 target_compile_options(base PRIVATE
@@ -32,6 +34,8 @@ target_link_libraries(base
         Threads::Threads
         ${Boost_LIBRARIES}
         protos
+        ${MYSQL_LIBRARY}
+        ${MYSQLPP_LIBRARY}
 )
 
 # asio 是 boost 的一部分，定义宏即可

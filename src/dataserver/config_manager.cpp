@@ -1,3 +1,4 @@
+#if 0
 #include "config_manager.h"
 #include <fstream>
 #include <sstream>
@@ -66,3 +67,4 @@ namespace cncpp
     }
 
 }  // namespace cncpp
+#endif

@@ -39,7 +39,7 @@ namespace cncpp
                 wrapper.work    = std::make_unique<boost::asio::io_context::work>(*wrapper.context);
             }
 
-            interval_ms_ = sMainConfig.asio_timer_interval_ms();
+            interval_ms_ = sMainConfig.main_loop_interval_ms();
             if (interval_ms_ == 0)
             {
                 interval_ms_ = 10;
@@ -277,64 +277,126 @@ namespace cncpp
             return;
         }
 
-        // 使用原子操作检查并更新状态，防止重复调用
+        // 防止重复调用
         StopState expected = StopState::Running;
         if (!stop_state_.compare_exchange_strong(expected, StopState::Stopping))
         {
-            // 已经在停止或已停止
-            LOG_DEBUG("IOContextPool already stopping or stopped, current state: {}",
-                      static_cast<int>(stop_state_.load()));
+            LOG_DEBUG("IOContextPool already stopping or stopped");
             return;
         }
 
         LOG_INFO("Stopping IOContextPool");
 
-        // 设置 running_ 为 false，阻止定时器重新启动
-        running_.store(false);
-
-        // 停止所有工作线程的 io_context（先停止，让线程开始退出）
-        for (size_t i = 0; i < io_contexts_.size(); ++i)
+        // 停止所有工作线程的 io_context
+        for (auto& wrapper : io_contexts_)
         {
-            if (io_contexts_[i].context)
+            if (wrapper.context)
             {
-                io_contexts_[i].context->stop();
-                LOG_TRACE("Worker io_context " << i << " stopped");
+                wrapper.context->stop();
             }
+            wrapper.work.reset();
         }
 
-        // 移除所有 work 对象，允许 io_context 自然停止
-        for (size_t i = 0; i < io_contexts_.size(); ++i)
-        {
-            io_contexts_[i].work.reset();
-            LOG_TRACE("Work object " << i << " reset");
-        }
-
-        // 取消主定时器
+        // 停止主定时器和主 IO 上下文（mainLoop）
         if (main_timer_)
         {
             boost::system::error_code ec;
             main_timer_->cancel(ec);
-            LOG_TRACE("Main timer canceled");
         }
-
-        // 停止主 IO 上下文（这会让 Run() 中的 main_io_context_->run() 返回）
         if (main_io_context_)
         {
             main_io_context_->stop();
-            LOG_TRACE("Main io_context stopped");
         }
 
-        // 更新状态为已停止
+        // 设置状态
+        running_.store(false);
         stop_state_.store(StopState::Stopped);
         cv_.notify_all();
 
-        LOG_INFO("IOContextPool stop signals sent");
+        LOG_INFO("IOContextPool stopped");
+    }
+
+    void IOContextPool::joinAllThreads()
+    {
+        LOG_INFO("Joining {} worker threads", io_contexts_.size());
+
+        for (size_t i = 0; i < io_contexts_.size(); ++i)
+        {
+            auto& wrapper = io_contexts_[i];
+
+            // 检查线程是否可 join（避免对已 detach 的线程操作）
+            if (!wrapper.thread.joinable())
+            {
+                LOG_DEBUG("Worker thread {} not joinable, skipping", i);
+                continue;
+            }
+
+            LOG_DEBUG("Joining worker thread {}", i);
+
+            try
+            {
+                // 使用带超时的轮询方式，避免无限等待
+                auto start    = std::chrono::steady_clock::now();
+                bool detached = false;
+
+                while (wrapper.thread.joinable())
+                {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (elapsed >= std::chrono::seconds(2))
+                    {
+                        LOG_WARN("Worker thread {} join timeout after {}ms, detaching", i,
+                                 std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+                        wrapper.thread.detach();
+                        detached = true;
+                        break;
+                    }
+
+                    // 回退到短时间 sleep 后重试
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+
+                if (!detached && !wrapper.thread.joinable())
+                {
+                    LOG_TRACE("Worker thread {} joined successfully", i);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                LOG_ERROR("Failed to join worker thread {}: {}", i, e.what());
+                // 尝试 detach 避免资源泄漏
+                if (wrapper.thread.joinable())
+                {
+                    try
+                    {
+                        wrapper.thread.detach();
+                    }
+                    catch (...)
+                    {
+                    }
+                }
+            }
+        }
+
+        LOG_INFO("All worker threads processed");
     }
 
     void IOContextPool::waitForStop()
     {
-        // 无限等待直到所有线程停止
-        waitForStopWithTimeout(std::chrono::seconds::max());
+        if (!initialized_)
+        {
+            return;
+        }
+
+        // 等待状态变为 Stopped（在锁内等待）
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock, [this]() {
+                return stop_state_.load() >= StopState::Stopped;
+            });
+        }
+
+        running_.store(false);
+        LOG_INFO("IOContextPool stopped");
     }
 
     bool IOContextPool::waitForStopWithTimeout(std::chrono::seconds timeout)
@@ -344,11 +406,14 @@ namespace cncpp
             return true;
         }
 
-        // 等待状态变为 Stopped
-        std::unique_lock<std::mutex> lock(mutex_);
-        bool                         stopped = cv_.wait_for(lock, timeout, [this]() {
-            return stop_state_.load() >= StopState::Stopped;
-        });
+        // 等待状态变为 Stopped（在锁内等待）
+        bool stopped;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            stopped = cv_.wait_for(lock, timeout, [this]() {
+                return stop_state_.load() >= StopState::Stopped;
+            });
+        }
 
         if (!stopped)
         {
@@ -356,116 +421,40 @@ namespace cncpp
             return false;
         }
 
-        // 等待所有工作线程退出
-        bool all_stopped = true;
-        auto start       = std::chrono::steady_clock::now();
-
-        for (size_t i = 0; i < io_contexts_.size(); ++i)
-        {
-            auto& wrapper = io_contexts_[i];
-            if (wrapper.thread.joinable())
-            {
-                auto remaining_timeout = timeout - (std::chrono::steady_clock::now() - start);
-                if (remaining_timeout <= std::chrono::seconds(0))
-                {
-                    LOG_WARN("Timeout before joining thread {}", i);
-                    all_stopped = false;
-                    continue;
-                }
-
-                // 使用 try_join_for（C++20）或轮询等待
-                bool joined = false;
-
-// 尝试使用 C++20 的 try_join_for
-#if __cpp_lib_thread_try_join_for >= 201911L
-                joined = wrapper.thread.try_join_for(remaining_timeout);
-#else
-                // 回退到轮询方式
-                auto thread_start = std::chrono::steady_clock::now();
-                while (wrapper.thread.joinable())
-                {
-                    auto elapsed = std::chrono::steady_clock::now() - thread_start;
-                    if (elapsed >= remaining_timeout)
-                    {
-                        LOG_WARN("Worker thread {} exit timeout", i);
-                        all_stopped = false;
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                }
-                joined = !wrapper.thread.joinable();
-#endif
-
-                if (joined)
-                {
-                    LOG_TRACE("Worker thread {} exited successfully", i);
-                }
-                else
-                {
-                    LOG_ERROR("Failed to join worker thread {}, attempting force termination", i);
-// 尝试强制终止线程（不推荐，但作为最后的手段）
-#ifdef _WIN32
-                    TerminateThread(wrapper.thread.native_handle(), 0);
-#else
-                    pthread_cancel(wrapper.thread.native_handle());
-#endif
-                    // 等待线程终止
-                    wrapper.thread.join();
-                    LOG_WARN("Worker thread {} force terminated", i);
-                    all_stopped = false;
-                }
-            }
-        }
-
         running_.store(false);
-        LOG_INFO("WaitForStopWithTimeout completed, all_stopped: {}", all_stopped);
-        return all_stopped;
+        LOG_INFO("IOContextPool stopped");
+        return true;
     }
 
     void IOContextPool::cleanup()
     {
-        // 使用原子操作检查并更新状态，防止重复调用
-        StopState expected = StopState::Stopped;
-        if (!stop_state_.compare_exchange_strong(expected, StopState::Cleaned))
+        LOG_INFO("Cleaning up IOContextPool");
+
+        // 如果还在运行，先停止
+        if (stop_state_.load() == StopState::Running)
         {
-            // 如果还在运行中，先停止
-            if (stop_state_.load() == StopState::Running)
-            {
-                stop();
-                waitForStop();
-                stop_state_.store(StopState::Cleaned);
-            }
-            else if (stop_state_.load() == StopState::Stopping)
-            {
-                waitForStop();
-                stop_state_.store(StopState::Cleaned);
-            }
-            else
-            {
-                // 已经清理过了
-                std::cout << "IOContextPool already cleaned up" << std::endl;
-                return;
-            }
+            stop();
         }
 
-        std::cout << "Cleaning up IOContextPool" << std::endl;
+        // 无论什么状态，都等待线程退出（不持有锁）
+        joinAllThreads();
 
+        // 先清理 SignalHandler（不持有锁）
+        signal_handler_.cleanup();
+
+        // 再清理其他资源（持有锁）
         {
             std::lock_guard<std::mutex> lock(mutex_);
-#if 1
-            // 清理所有 io_context
             io_contexts_.clear();
             main_io_context_.reset();
             main_timer_.reset();
 
-            // 重置状态
             initialized_ = false;
             next_index_.store(0);
             running_.store(false);
-#endif
         }
 
-        std::cout << "IOContextPool cleaned up" << std::endl;
+        LOG_INFO("IOContextPool cleaned up");
     }
 
     IOContextPool::~IOContextPool()

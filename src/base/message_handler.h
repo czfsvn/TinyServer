@@ -32,7 +32,7 @@ namespace cncpp
             handlers_[message_id] = handler;
         }
 
-        void registerMessageHandler(MessageId message_id, MessageCreator creator, MessageHandler handler)
+        void registerMessageHandler(MsgID message_id, MessageCreator creator, MessageHandler handler)
         {
             registerMessageHandler(static_cast<uint32_t>(message_id), creator, handler);
         }
@@ -44,7 +44,7 @@ namespace cncpp
             handlers_.erase(message_id);
         }
 
-        void unregisterMessageHandler(MessageId message_id)
+        void unregisterMessageHandler(MsgID message_id)
         {
             unregisterMessageHandler(static_cast<uint32_t>(message_id));
         }
@@ -60,7 +60,7 @@ namespace cncpp
             return nullptr;
         }
 
-        std::shared_ptr<google::protobuf::Message> createMessage(MessageId message_id) const
+        std::shared_ptr<google::protobuf::Message> createMessage(MsgID message_id) const
         {
             return createMessage(static_cast<uint32_t>(message_id));
         }
@@ -96,7 +96,7 @@ namespace cncpp
             return creators_.find(message_id) != creators_.end();
         }
 
-        bool isRegistered(MessageId message_id) const
+        bool isRegistered(MsgID message_id) const
         {
             return isRegistered(static_cast<uint32_t>(message_id));
         }
@@ -163,7 +163,7 @@ namespace cncpp
             }, wrapped_handler);
         }
 
-        explicit MessageHandlerRegistrar(MessageId message_id, TypedHandler handler)
+        explicit MessageHandlerRegistrar(MsgID message_id, TypedHandler handler)
             : MessageHandlerRegistrar(static_cast<uint32_t>(message_id), std::move(handler))
         {
         }
@@ -182,11 +182,11 @@ namespace cncpp
 
 /**
      * @brief 消息注册宏（简洁版本）
-     * @param MESSAGE_ID 消息ID（支持 MessageId 枚举或 uint32_t）
+     * @param MESSAGE_ID 消息ID（支持 MsgID 枚举或 uint32_t）
      * @param MESSAGE_TYPE protobuf消息类型
      * 
      * 使用方式:
-     * PROTO_MSG(MessageId::LOGIN_REQUEST, cncpp::LoginRequest) {
+     * PROTO_MSG(MsgID::LOGIN_REQUEST, cncpp::LoginRequest) {
      *     LOG_INFO("Login request from: {}", msg->username());
      * }
      * 

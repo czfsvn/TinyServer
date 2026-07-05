@@ -1,3 +1,4 @@
+#if 0
 #pragma once
 
 #include <mysql/mysql.h>
@@ -50,3 +51,5 @@ namespace cncpp
 }  // namespace cncpp
 
 #define sMySQLPool cncpp::Singleton<cncpp::MySQLConnectionPool>::getMe()
+
+#endif

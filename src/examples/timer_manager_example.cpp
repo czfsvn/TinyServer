@@ -88,7 +88,7 @@ int main(int argc, char* argv[])
 
     sIOContextPool.setTimerCallback([]() {
         sTimerManager.tick();
-    }, sMainConfig.asio_timer_interval_ms());
+    }, sMainConfig.main_loop_interval_ms());
 
     sIOContextPool.run();
     // 停止定时器线程（当前版本没有 stop 方法，这里直接退出）

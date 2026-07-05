@@ -65,6 +65,53 @@ namespace cncpp
         virtual void ReadFromTree(const pt::ptree& tree) = 0;
     };
 
+    // 连接配置
+    class MysqlConfig : public ConfigModule
+    {
+    public:
+        MysqlConfig() : port(3306), charset("utf8mb4")
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            host.ReadFromTree(tree, "mysql", "host");
+            user.ReadFromTree(tree, "mysql", "user");
+            password.ReadFromTree(tree, "mysql", "password");
+            database.ReadFromTree(tree, "mysql", "database");
+            port.ReadFromTree(tree, "mysql", "port");
+            charset.ReadFromTree(tree, "mysql", "charset");
+        }
+
+    public:
+        ConfigItem<std::string> host;
+        ConfigItem<std::string> user;
+        ConfigItem<std::string> password;
+        ConfigItem<std::string> database;
+        ConfigItem<uint32_t>    port;
+        ConfigItem<std::string> charset;
+    };
+
+    class RedisConfig : public ConfigModule
+    {
+    public:
+        RedisConfig() : port(6379), dbindex(0)
+        {
+        }
+
+        void ReadFromTree(const pt::ptree& tree) override
+        {
+            host.ReadFromTree(tree, "redis", "host");
+            port.ReadFromTree(tree, "redis", "port");
+            dbindex.ReadFromTree(tree, "redis", "dbindex");
+        }
+
+    public:
+        ConfigItem<std::string> host;
+        ConfigItem<uint32_t>    port;
+        ConfigItem<uint32_t>    dbindex;
+    };
+
     class MainConfig : public ConfigModule
     {
     public:
@@ -79,7 +126,6 @@ namespace cncpp
             async_thread_count.ReadFromTree(tree, "main", "async_thread_count");
             main_loop_interval_ms.ReadFromTree(tree, "main", "main_loop_interval_ms");
             asio_pool_size.ReadFromTree(tree, "main", "asio_pool_size");
-            asio_timer_interval_ms.ReadFromTree(tree, "main", "asio_timer_interval_ms");
         }
 
     public:
@@ -88,40 +134,6 @@ namespace cncpp
         ConfigItem<uint16_t>    async_thread_count;
         ConfigItem<uint16_t>    main_loop_interval_ms;
         ConfigItem<uint16_t>    asio_pool_size;
-        ConfigItem<uint16_t>    asio_timer_interval_ms;
-    };
-
-    // 网络配置类
-    class NetworkConfig : public ConfigModule
-    {
-    public:
-        NetworkConfig()
-            : port(8080),
-              host("127.0.0.1"),
-              mode("server"),
-              thread_count(1),
-              server_host("127.0.0.1"),
-              server_port(9090)
-        {
-        }
-
-        void ReadFromTree(const pt::ptree& tree) override
-        {
-            port.ReadFromTree(tree, "network", "port");
-            host.ReadFromTree(tree, "network", "host");
-            mode.ReadFromTree(tree, "network", "mode");
-            thread_count.ReadFromTree(tree, "network", "thread_count");
-            server_host.ReadFromTree(tree, "network", "server_host");
-            server_port.ReadFromTree(tree, "network", "server_port");
-        }
-
-    public:
-        ConfigItem<short>       port;
-        ConfigItem<std::string> host;
-        ConfigItem<std::string> mode;
-        ConfigItem<uint16_t>    thread_count;
-        ConfigItem<std::string> server_host;  // 网关连接的服务器地址
-        ConfigItem<short>       server_port;  // 网关连接的服务器端口
     };
 
     // 日志配置类
@@ -388,21 +400,6 @@ namespace cncpp
                     ReadFromFile(config_file_);
                 }
 
-                if (vm.count("port"))
-                {
-                    network_config_.GetConfig().port.set(vm["port"].as<short>());
-                }
-
-                if (vm.count("host"))
-                {
-                    network_config_.GetConfig().host.set(vm["host"].as<std::string>());
-                }
-
-                if (vm.count("mode"))
-                {
-                    network_config_.GetConfig().mode.set(vm["mode"].as<std::string>());
-                }
-
                 return true;
             }
             catch (const std::exception& e)
@@ -421,7 +418,6 @@ namespace cncpp
                 pt::read_ini(file_path, tree);
 
                 // 按模块读取配置
-                network_config_.ReadFromTree(tree);
                 logger_config_.ReadFromTree(tree);
                 encryption_config_.ReadFromTree(tree);
                 main_config_.ReadFromTree(tree);
@@ -429,6 +425,8 @@ namespace cncpp
                 tinyserver_config_.ReadFromTree(tree);
                 client_config_.ReadFromTree(tree);
                 dataserver_config_.ReadFromTree(tree);
+                mysql_config_.ReadFromTree(tree);
+                redis_config_.ReadFromTree(tree);
 
                 return true;
             }
@@ -443,12 +441,6 @@ namespace cncpp
         const MainConfig& GetMainConfig() const
         {
             return main_config_.GetConfig();
-        }
-
-        // 获取网络配置
-        const NetworkConfig& GetNetworkConfig() const
-        {
-            return network_config_.GetConfig();
         }
 
         const LoggerConfig& GetLoggerConfig() const
@@ -497,9 +489,20 @@ namespace cncpp
             return config_file_;
         }
 
+        // 获取 Mysql 配置
+        const MysqlConfig& GetMysqlConfig() const
+        {
+            return mysql_config_.GetConfig();
+        }
+
+        // 获取 Redis 配置
+        const RedisConfig& GetRedisConfig() const
+        {
+            return redis_config_.GetConfig();
+        }
+
     private:
         std::string                     config_file_;
-        ConfigManager<NetworkConfig>    network_config_;
         ConfigManager<LoggerConfig>     logger_config_;
         ConfigManager<EncryptionConfig> encryption_config_;
         ConfigManager<MainConfig>       main_config_;
@@ -507,12 +510,13 @@ namespace cncpp
         ConfigManager<TinyServerConfig> tinyserver_config_;
         ConfigManager<ClientConfig>     client_config_;
         ConfigManager<DataServerConfig> dataserver_config_;
+        ConfigManager<MysqlConfig>      mysql_config_;
+        ConfigManager<RedisConfig>      redis_config_;
     };
 
 }  // namespace cncpp
 
 #define sConfig cncpp::Config::getMe()
-#define sNetworkConfig cncpp::Config::getMe().GetNetworkConfig()
 #define sLoggerConfig cncpp::Config::getMe().GetLoggerConfig()
 #define sEncryptionConfig cncpp::Config::getMe().GetEncryptionConfig()
 #define sMainConfig cncpp::Config::getMe().GetMainConfig()
@@ -520,5 +524,7 @@ namespace cncpp
 #define sTinyServerConfig cncpp::Config::getMe().GetTinyServerConfig()
 #define sClientConfig cncpp::Config::getMe().GetClientConfig()
 #define sDataServerConfig cncpp::Config::getMe().GetDataServerConfig()
+#define sMysqlConfig cncpp::Config::getMe().GetMysqlConfig()
+#define sRedisConfig cncpp::Config::getMe().GetRedisConfig()
 
 #endif  // CONFIG_H

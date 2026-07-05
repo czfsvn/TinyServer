@@ -125,10 +125,10 @@ bool GatewayServer::initTinyClient()
 
         tiny_client_->setGatewayID(1);
 
-        tiny_client_->setConnectCallback(
-            std::bind(&GatewayServer::onTinyClientConnected, this, std::placeholders::_1, std::placeholders::_2));
-        tiny_client_->setMessageCallback(std::bind(&GatewayServer::onTinyClientMessage, this, std::placeholders::_1));
-        tiny_client_->setDisconnectCallback(std::bind(&GatewayServer::onTinyClientDisconnected, this));
+        //tiny_client_->setConnectCallback(
+        //    std::bind(&GatewayServer::onTinyClientConnected, this, std::placeholders::_1, std::placeholders::_2));
+        //tiny_client_->setMessageCallback(std::bind(&GatewayServer::onTinyClientMessage, this, std::placeholders::_1));
+        //tiny_client_->setDisconnectCallback(std::bind(&GatewayServer::onTinyClientDisconnected, this));
 
         LOG_INFO("TinyClient initialized");
         return true;
@@ -168,25 +168,28 @@ bool GatewayServer::initDataClient()
 
 bool GatewayServer::connectToBackendServers()
 {
-    const std::string& tiny_host = sNetworkConfig.server_host();
-    short              tiny_port = sNetworkConfig.server_port();
+    return conectTinyServer() && connectToDataServer();
+}
+
+bool GatewayServer::conectTinyServer()
+{
+    const std::string& tiny_host = sTinyServerConfig.listen_host();
+    const short        tiny_port = sTinyServerConfig.listen_port();
 
     LOG_INFO("Connecting to TinyServer: {}:{}...", tiny_host, tiny_port);
-    bool tiny_result = tiny_client_->connect(tiny_host, tiny_port);
+    return tiny_client_->connect(tiny_host, tiny_port);
+}
 
-    const std::string& data_host = sNetworkConfig.server_host();
-    short              data_port = sNetworkConfig.server_port();
+bool GatewayServer::connectToDataServer()
+{
+    return true;
+#if 0
+    const std::string& data_host = sDataServerConfig.listen_host();
+    const short        data_port = sDataServerConfig.listen_port();
 
     LOG_INFO("Connecting to DataServer: {}:{}...", data_host, data_port);
-    bool data_result = data_client_->connect(data_host, data_port);
-
-    if (!tiny_result || !data_result)
-    {
-        LOG_ERROR("Failed to initiate backend connections");
-        return false;
-    }
-
-    return true;
+    return data_client_->connect(data_host, data_port);
+#endif
 }
 
 void GatewayServer::onTinyClientConnected(bool success, const std::string& error)
@@ -253,17 +256,29 @@ void GatewayServer::onDataClientMessage(const cncpp::NetworkMessage& message)
 
 bool GatewayServer::checkBackendReady()
 {
-    bool tiny_ready = tiny_client_
-                      && (tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
-                          || tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
-
-    bool data_ready = data_client_
-                      && (data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
-                          || data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
-
-    return tiny_ready && data_ready;
+    return checkTinyClientReady() && checkDataClientReady();
 }
 
+bool GatewayServer::checkTinyClientReady()
+{
+    if (!tiny_client_)
+        return false;
+
+    return (tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
+            || tiny_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
+}
+
+bool GatewayServer::checkDataClientReady()
+{
+    return true;
+#if 0
+    if (!data_client_)
+        return false;
+
+    return (data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Connected
+            || data_client_->getConnectionState() == cncpp::TcpClient::ConnectionState::Okay);
+#endif
+}
 void GatewayServer::stopAcceptor()
 {
     if (acceptor_)
@@ -280,7 +295,7 @@ bool GatewayServer::initAcceptor()
         return false;
 
     acceptor_ = sIOContextPool.createAcceptor(
-        sNetworkConfig.port(), std::bind(&GatewayServer::onClientConnected, this, std::placeholders::_1));
+        sGatewayConfig.listen_port(), std::bind(&GatewayServer::onClientConnected, this, std::placeholders::_1));
 
     if (!acceptor_)
     {
@@ -288,7 +303,6 @@ bool GatewayServer::initAcceptor()
         return false;
     }
 
-    LOG_INFO("Acceptor initialized on port {}", sNetworkConfig.port());
     return true;
 }
 
@@ -298,7 +312,7 @@ bool GatewayServer::startAcceptor()
         return false;
 
     acceptor_->start();
-    LOG_INFO("Acceptor started on port {}", sNetworkConfig.port());
+    LOG_INFO("Acceptor started on port {}", sGatewayConfig.listen_port());
     return true;
 }
 
@@ -332,12 +346,12 @@ bool GatewayServer::onTick()
         sGateTaskManager.cleanupTimeoutTasks();
         sGateUserManager.cleanupTimeoutUsers();
 
-        bool tiny_connected = tiny_client_ && tiny_client_->isConnected();
-        bool data_connected = data_client_ && data_client_->isConnected();
+        //bool tiny_connected = tiny_client_ && tiny_client_->isConnected();
+        //bool data_connected = data_client_ && data_client_->isConnected();
 
-        LOG_DEBUG("Gateway tick - active tasks: {}, online users: {}, tiny_connected: {}, data_connected: {}",
-                  sGateTaskManager.getStats().active_tasks, sGateUserManager.getOnlineUserCount(), tiny_connected,
-                  data_connected);
+        //LOG_DEBUG("Gateway tick - active tasks: {}, online users: {}, tiny_connected: {}, data_connected: {}",
+        //          sGateTaskManager.getStats().active_tasks, sGateUserManager.getOnlineUserCount(), tiny_connected,
+        //          data_connected);
     }
 
     return true;

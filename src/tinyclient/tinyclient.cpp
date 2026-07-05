@@ -21,7 +21,7 @@ bool TinyClient::sendAuthMessage(uint32_t user_id)
     }
 
     cncpp::NetworkMessage msg;
-    msg.header_.message_id_  = toUint32(MessageId::AUTH);
+    msg.header_.message_id_  = toUint32(MsgID::AUTH);
     msg.header_.body_length_ = sizeof(user_id);
     msg.setBody(std::to_string(user_id));
 

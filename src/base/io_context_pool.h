@@ -112,6 +112,9 @@ namespace cncpp
 
         void runIOContextPools();
 
+        // 线程等待辅助函数
+        void joinAllThreads();
+
     private:
         // 停止状态枚举
         enum class StopState

@@ -44,11 +44,16 @@ public:
 private:
     void finalAll();
 
-    bool initTinyClient();
-    bool initDataClient();
-
     bool connectToBackendServers();
     bool checkBackendReady();
+
+    bool initTinyClient();
+    bool conectTinyServer();
+    bool checkTinyClientReady();
+
+    bool initDataClient();
+    bool connectToDataServer();
+    bool checkDataClientReady();
 
     void onTinyClientConnected(bool success, const std::string& error);
     void onTinyClientDisconnected();

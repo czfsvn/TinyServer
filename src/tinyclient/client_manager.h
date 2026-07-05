@@ -35,4 +35,4 @@ private:
     std::atomic<size_t>        next_client_index_{0};
 };
 
-#define sTinyClientManager ClientManager::getMe()
+#define sClientManager ClientManager::getMe()

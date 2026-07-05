@@ -7,14 +7,14 @@
      * @brief 消息ID枚举定义
      * 集中管理所有消息类型的唯一标识
      */
-enum class MessageId : uint32_t
+enum class MsgID : uint32_t
 {
     // ========== 系统预留消息 (1-999) ==========
-    HEARTBEAT = 1,  // 心跳消息
-    HANDSHAKE = 2,  // 握手消息
-    ERROR     = 3,  // 错误消息
-    RESPONSE  = 4,  // 响应消息
-    AUTH      = 5,  // 认证消息
+    HEARTBEAT               = 1,  // 心跳消息
+    VERIFTY_CONNECTION      = 2,  // 发送消息验证连接
+    RESP_VERIFTY_CONNECTION = 3,  // 响应消息验证连接
+    RESPONSE                = 4,  // 响应消息
+    AUTH                    = 5,  // 认证消息
 
     // ========== 用户业务消息 (1000-1999) ==========
     LOGIN_REQUEST      = 1001,  // 登录请求
@@ -57,7 +57,7 @@ enum class MessageId : uint32_t
 /**
      * @brief 将消息ID枚举转换为uint32_t
      */
-inline uint32_t toUint32(MessageId message_id)
+inline uint32_t toUint32(MsgID message_id)
 {
     return static_cast<uint32_t>(message_id);
 }

@@ -1,6 +1,6 @@
 #include "data_task.h"
-#include "logger.h"
 #include "data_processor.h"
+#include "logger.h"
 
 DataTask::DataTask(tcp::socket&& socket) : cncpp::TcpTask(std::move(socket))
 {
@@ -13,7 +13,7 @@ DataTask::~DataTask()
 
 void DataTask::processMessage(const cncpp::NetworkMessage& message)
 {
-    LOG_DEBUG("DataTask {} received message: {}", getTaskID(), message.body_);
+    //LOG_DEBUG("DataTask {} received message: {}", getTaskID(), message.body_);
     handleDatabaseRequest(message);
 }
 
@@ -39,9 +39,9 @@ void DataTask::handleDatabaseRequest(const cncpp::NetworkMessage& message)
 {
     try
     {
-        uint32_t request_type = message.header_.message_id_;
-        std::string response = sDataProcessor.processRequest(request_type, message.body_);
-        sendResponse(message.header_.message_id_, 0, response);
+        //uint32_t    request_type = message.header_.message_id_;
+        //std::string response     = sDataProcessor.processRequest(request_type, message.body_);
+        //sendResponse(message.header_.message_id_, 0, response);
     }
     catch (const std::exception& e)
     {
@@ -55,6 +55,5 @@ void DataTask::sendResponse(uint32_t request_id, uint32_t error_code, const std:
     (void)request_id;
     (void)error_code;
     (void)data;
-    LOG_DEBUG("DataTask {} sending response, request_id: {}, error_code: {}", 
-              getTaskID(), request_id, error_code);
+    LOG_DEBUG("DataTask {} sending response, request_id: {}, error_code: {}", getTaskID(), request_id, error_code);
 }

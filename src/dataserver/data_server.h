@@ -25,11 +25,12 @@ public:
 
 private:
     void onConnectionCreated(tcp::socket&& sock);
-    bool initMySQLPool();
     bool initAcceptor();
     bool startAcceptor();
     void stopAcceptor();
     void closeAllSessions();
+
+    void checkMysql();
 
 private:
     std::shared_ptr<cncpp::Acceptor> acceptor_;

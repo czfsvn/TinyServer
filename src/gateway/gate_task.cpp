@@ -148,7 +148,7 @@ void GateTask::onDisconnected()
 
 bool GateTask::processAuthentication(const cncpp::NetworkMessage& message)
 {
-    if (message.header_.message_id_ == toUint32(MessageId::AUTH))
+    if (message.header_.message_id_ == toUint32(MsgID::AUTH))
     {
         try
         {
