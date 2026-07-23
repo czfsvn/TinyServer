@@ -4,6 +4,7 @@
 #include "gate_user_manager.h"
 #include "io_context_pool.h"
 #include "logger.h"
+#include "xmlloader.h"
 
 GatewayServer::GatewayServer()
 {
@@ -355,4 +356,9 @@ bool GatewayServer::onTick()
     }
 
     return true;
+}
+
+void GatewayServer::loadGameConfigs()
+{
+    xmlconfigs::gateway_loadConfig();
 }

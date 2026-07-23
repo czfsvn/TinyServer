@@ -46,6 +46,9 @@ namespace cncpp
             return false;
         }
 
+        // 加载游戏配置
+        loadGameConfigs();
+
         // 调用派生类初始化
         if (!onInit())
         {

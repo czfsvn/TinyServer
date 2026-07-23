@@ -446,7 +446,7 @@ def gen_enum_header(enum: EnumDef, indent: int) -> List[str]:
     return lines
 
 
-def gen_class_header(class_def: ClassDef, indent: int) -> List[str]:
+def gen_class_header(class_def: ClassDef, indent: int, is_root: bool = False) -> List[str]:
     """递归生成类的头文件代码。"""
     pad = '    ' * indent
     cn = class_def.class_name
@@ -465,9 +465,16 @@ def gen_class_header(class_def: ClassDef, indent: int) -> List[str]:
     lines.append('')
     # 核心方法
     lines.append(f'{pad}    bool loadXml(const boost::property_tree::ptree& root);')
+    if is_root:
+        lines.append(f'{pad}    bool loadXml(const std::string& xml_file_path);')
     lines.append(f'{pad}    void dumpAll() const;')
     lines.append(f'{pad}    void clear();')
     lines.append('')
+
+    # 路径相关 getter (仅根类)
+    if is_root:
+        lines.append(f'{pad}    const std::string& getXmlFilePath() const {{ return xml_file_path_; }}')
+        lines.append('')
 
     # operator< (用于set容器)
     if class_def.set_key_member:
@@ -503,11 +510,12 @@ def gen_class_header(class_def: ClassDef, indent: int) -> List[str]:
             lines.append(f'{pad}    {child.class_name} {child.member_name};')
 
     # 私有字段
-    if class_def.fields:
-        lines.append('')
-        lines.append(f'{pad}private:')
-        for f in class_def.fields:
-            lines.append(f'{pad}    {f.cpp_type} {f.member_name} = {f.default_val};')
+    lines.append('')
+    lines.append(f'{pad}private:')
+    for f in class_def.fields:
+        lines.append(f'{pad}    {f.cpp_type} {f.member_name} = {f.default_val};')
+    if is_root:
+        lines.append(f'{pad}    std::string xml_file_path_ = "";')
 
     lines.append(f'{pad}}};')
     return lines
@@ -567,11 +575,10 @@ def gen_struct_header(struct_def: StructDef, indent: int) -> List[str]:
         else:
             lines.append(f'{pad}    {child.class_name} {child.member_name};')
 
-    if cd.fields:
-        lines.append('')
-        lines.append(f'{pad}private:')
-        for f in cd.fields:
-            lines.append(f'{pad}    {f.cpp_type} {f.member_name} = {f.default_val};')
+    lines.append('')
+    lines.append(f'{pad}private:')
+    for f in cd.fields:
+        lines.append(f'{pad}    {f.cpp_type} {f.member_name} = {f.default_val};')
 
     lines.append(f'{pad}}};')
     return lines
@@ -597,7 +604,8 @@ def generate_header(result: ParseResult, namespace: str, header_name: str) -> st
     lines.append('#include <iostream>')
     lines.append('#include <utility>')        # std::move
     lines.append('#include <stdexcept>')      # std::exception
-    if 'string' in needed:
+    lines.append('#include <string>')         # std::string (xml_file_path_)
+    if 'vector' in needed:
         lines.append('#include <string>')
     if 'vector' in needed:
         lines.append('#include <vector>')
@@ -630,7 +638,7 @@ def generate_header(result: ParseResult, namespace: str, header_name: str) -> st
 
     lines.append('// ==================== Classes ====================')
     lines.append('')
-    lines.extend(gen_class_header(result.root_class, 1))
+    lines.extend(gen_class_header(result.root_class, 1, is_root=True))
     lines.append('')
     lines.append(f'}} // namespace {namespace}')
     lines.append('')
@@ -724,6 +732,27 @@ def gen_loadxml_impl(class_def: ClassDef, qualified_name: str) -> List[str]:
     return lines
 
 
+def gen_loadxml_file_impl(class_def: ClassDef, qualified_name: str) -> List[str]:
+    """生成 loadXml(const std::string&) 重载：读取文件后调用 ptree 版本。"""
+    lines = []
+    lines.append(f'bool {qualified_name}::loadXml(const std::string& xml_file_path)')
+    lines.append('{')
+    lines.append('    xml_file_path_ = xml_file_path;')
+    lines.append('    try')
+    lines.append('    {')
+    lines.append('        boost::property_tree::ptree tree;')
+    lines.append('        boost::property_tree::read_xml(xml_file_path_, tree);')
+    lines.append('        return loadXml(tree);')
+    lines.append('    }')
+    lines.append('    catch (const std::exception& e)')
+    lines.append('    {')
+    lines.append(f'        std::cerr << "[{class_def.class_name}] failed to read file \\"" << xml_file_path_ << "\\": " << e.what() << std::endl;')
+    lines.append('        return false;')
+    lines.append('    }')
+    lines.append('}')
+    return lines
+
+
 def gen_dumpall_impl(class_def: ClassDef, qualified_name: str) -> List[str]:
     """生成 dumpAll 方法实现。"""
     lines = []
@@ -793,7 +822,7 @@ def gen_clear_impl(class_def: ClassDef, qualified_name: str) -> List[str]:
     return lines
 
 
-def gen_class_cpp(class_def: ClassDef, scope: List[str], namespace: str) -> List[str]:
+def gen_class_cpp(class_def: ClassDef, scope: List[str], namespace: str, is_root: bool = False) -> List[str]:
     """递归生成类及其嵌套类的CPP实现。"""
     lines = []
     qualified = f'{namespace}::{"::".join(scope + [class_def.class_name])}'
@@ -803,9 +832,14 @@ def gen_class_cpp(class_def: ClassDef, scope: List[str], namespace: str) -> List
     lines.append(f'// ==================== {full_path} ====================')
     lines.append('')
 
-    # loadXml
+    # loadXml (ptree)
     lines.extend(gen_loadxml_impl(class_def, qualified))
     lines.append('')
+
+    # loadXml (file path) - 仅根类
+    if is_root:
+        lines.extend(gen_loadxml_file_impl(class_def, qualified))
+        lines.append('')
 
     # dumpAll
     lines.extend(gen_dumpall_impl(class_def, qualified))
@@ -860,7 +894,7 @@ def generate_cpp(result: ParseResult, namespace: str, header_name: str) -> str:
         lines.extend(gen_struct_cpp(s, namespace))
 
     # 根类及嵌套类实现
-    lines.extend(gen_class_cpp(result.root_class, [], namespace))
+    lines.extend(gen_class_cpp(result.root_class, [], namespace, is_root=True))
 
     lines.append(f'}} // namespace {namespace}')
     lines.append('')
@@ -899,9 +933,11 @@ def main():
   - 默认构造/析构函数
   - 禁止拷贝 (copy = delete)
   - 支持move语义 (move = default)
-  - bool loadXml() 带异常处理，返回加载结果
+  - bool loadXml(ptree) 带异常处理，返回加载结果
+  - bool loadXml(string) 便捷重载，传入文件路径直接读取
   - void dumpAll() 调试输出
   - void clear() 重置所有字段和容器
+  - const string& getXmlFilePath() 获取最近加载的文件路径
   - 所有属性的 inline getter
   - set容器自动生成 operator<
 '''

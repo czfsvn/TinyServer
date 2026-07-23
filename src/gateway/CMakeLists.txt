@@ -36,9 +36,7 @@
 #     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 # )
 
-
-
 file(GLOB SOURCES "*.cpp")
 add_executable(gateserver ${SOURCES})
-target_link_libraries(gateserver PRIVATE base xmlconfigs)
+target_link_libraries(gateserver PRIVATE base xmlconfigs)   
 

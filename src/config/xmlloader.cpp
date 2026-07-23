@@ -1,9 +1,9 @@
 #include "xmlloader.h"
 #include "xmlfiles/CampofficialPromote.h"
 
+xml::CampofficialPromote campofficialpromote;
 namespace xmlconfigs
 {
-
     bool tiny_server_loadConfig()
     {
         return true;
@@ -11,6 +11,7 @@ namespace xmlconfigs
 
     bool gateway_loadConfig()
     {
+        campofficialpromote.loadXml("");
         return true;
     }
 

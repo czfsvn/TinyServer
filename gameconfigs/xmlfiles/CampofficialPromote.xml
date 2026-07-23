@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CampofficialPromote>
+	<funcopen open="1" allzone="1" openzones="" addexpoitendtime="2026-09-13 23:55:00" seasonawardopen="1" />
+	<exploitlimit daylimit="6000" weeklimit="20000" daysublimit="3000" weeksublimit="10000" />
+	<toplist open="1" round="20260605" maxshow="3008" fromtime="2026-86-05 00:00:00" totime="2026-09-13 23:50:00" />
+	<appointofficial open="1" minofficialid="24" minexploit="116000" reappointcd="604800" appointprotecttime="86400">
+		<extraofficial officialid="1" officialname="镇南大将军" maxnum="8" />
+		<extraofficial officialid="2" officialname="镇北大将军" maxnum="8" />
+		<extraofficial officialid="3" officialname="镇东大将军" maxnum="8" />
+		<extraofficial officialid="4" officialname="镇西大将军" maxnum="8" />
+	</appointofficial>
+</CampofficialPromote>

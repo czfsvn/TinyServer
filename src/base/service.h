@@ -122,6 +122,9 @@ namespace cncpp
         {
         }
 
+        virtual void loadGameConfigs()
+        {
+        }
         /**
      * @brief 派生类主循环钩子
      * @return 是否成功
