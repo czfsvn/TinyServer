@@ -11,8 +11,7 @@ namespace xmlconfigs
 
     bool gateway_loadConfig()
     {
-        campofficialpromote.loadXml("");
+        campofficialpromote.loadXml("test_official.xml");
         return true;
     }
-
 }  // namespace xmlconfigs

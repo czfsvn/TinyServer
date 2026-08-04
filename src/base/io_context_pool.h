@@ -129,6 +129,7 @@ namespace cncpp
         std::atomic<size_t>           next_index_{0};
         std::atomic<bool>             running_{false};
         std::atomic<StopState>        stop_state_{StopState::Running};
+        std::atomic<bool>             cleaned_{false};  // 防止 cleanup() 重复执行
         std::mutex                    mutex_;
         std::condition_variable       cv_;
         bool                          initialized_{false};

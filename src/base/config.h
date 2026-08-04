@@ -126,6 +126,7 @@ namespace cncpp
             async_thread_count.ReadFromTree(tree, "main", "async_thread_count");
             main_loop_interval_ms.ReadFromTree(tree, "main", "main_loop_interval_ms");
             asio_pool_size.ReadFromTree(tree, "main", "asio_pool_size");
+            log_yml_path.ReadFromTree(tree, "main", "log_yml_path");
         }
 
     public:
@@ -134,60 +135,7 @@ namespace cncpp
         ConfigItem<uint16_t>    async_thread_count;
         ConfigItem<uint16_t>    main_loop_interval_ms;
         ConfigItem<uint16_t>    asio_pool_size;
-    };
-
-    // 日志配置类
-    class LoggerConfig : public ConfigModule
-    {
-    public:
-        LoggerConfig()
-            : log_dir("logs"),
-              app_name("network_app"),
-              log_file("app.log"),
-              retention_days(30),
-              retention_hours(72),
-              max_file_size(1024 * 1024 * 100),
-              enable_console(true),
-              async_mode(false),
-              async_queue_size(8192),
-              console_level("DBG"),
-              file_level("LOG_INFO"),
-              pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%t%$] [%^%l%$] %v"),
-              rotation_policy("DAILY")
-        {
-        }
-
-        void ReadFromTree(const pt::ptree& tree) override
-        {
-            log_dir.ReadFromTree(tree, "logger", "log_dir");
-            app_name.ReadFromTree(tree, "logger", "app_name");
-            log_file.ReadFromTree(tree, "logger", "log_file");
-            retention_days.ReadFromTree(tree, "logger", "retention_days");
-            retention_hours.ReadFromTree(tree, "logger", "retention_hours");
-            max_file_size.ReadFromTree(tree, "logger", "max_file_size");
-            enable_console.ReadFromTree(tree, "logger", "enable_console");
-            async_mode.ReadFromTree(tree, "logger", "async_mode");
-            async_queue_size.ReadFromTree(tree, "logger", "async_queue_size");
-            console_level.ReadFromTree(tree, "logger", "console_level");
-            file_level.ReadFromTree(tree, "logger", "file_level");
-            pattern.ReadFromTree(tree, "logger", "pattern");
-            rotation_policy.ReadFromTree(tree, "logger", "rotation_policy");
-        }
-
-    public:
-        ConfigItem<std::string> log_dir;           // 日志目录
-        ConfigItem<std::string> app_name;          // 应用名称
-        ConfigItem<std::string> log_file;          // 日志文件名
-        ConfigItem<int>         retention_days;    // 保留天数（按日）
-        ConfigItem<int>         retention_hours;   // 保留小时数（按小时）
-        ConfigItem<uint32_t>    max_file_size;     // 单个文件最大大小（默认100MB）
-        ConfigItem<bool>        enable_console;    // 是否启用控制台日志
-        ConfigItem<bool>        async_mode;        // 是否启用异步模式
-        ConfigItem<uint32_t>    async_queue_size;  // 异步队列大小
-        ConfigItem<std::string> console_level;     // 控制台日志级别
-        ConfigItem<std::string> file_level;        // 文件日志级别
-        ConfigItem<std::string> pattern;           // 日志格式
-        ConfigItem<std::string> rotation_policy;   // 日志滚动策略
+        ConfigItem<std::string> log_yml_path;
     };
 
     // 加密配置类
@@ -418,7 +366,6 @@ namespace cncpp
                 pt::read_ini(file_path, tree);
 
                 // 按模块读取配置
-                logger_config_.ReadFromTree(tree);
                 encryption_config_.ReadFromTree(tree);
                 main_config_.ReadFromTree(tree);
                 gateway_config_.ReadFromTree(tree);
@@ -441,17 +388,6 @@ namespace cncpp
         const MainConfig& GetMainConfig() const
         {
             return main_config_.GetConfig();
-        }
-
-        const LoggerConfig& GetLoggerConfig() const
-        {
-            return logger_config_.GetConfig();
-        }
-
-        LoggerConfig& GetLoggerConfig()
-        {
-            return logger_config_.GetConfig();
-            //return logger_config_;
         }
 
         // 获取加密配置
@@ -503,7 +439,6 @@ namespace cncpp
 
     private:
         std::string                     config_file_;
-        ConfigManager<LoggerConfig>     logger_config_;
         ConfigManager<EncryptionConfig> encryption_config_;
         ConfigManager<MainConfig>       main_config_;
         ConfigManager<GatewayConfig>    gateway_config_;

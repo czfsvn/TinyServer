@@ -1,0 +1,27 @@
+log:
+  global_level: debug
+  format: "[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%t] %v"
+  flush_on: error
+  flush_interval_secs: 3
+
+  async:
+    enabled: true
+    queue_size: 8192
+    thread_count: 1
+    overflow_policy: block        # block | overrun_oldest
+
+  console:
+    enabled: true
+    level: info
+
+  file:
+    enabled: true
+    level: debug
+    dir: ./logs
+    filename_prefix: app
+    filename_suffix: .log
+    rotation:
+      period: hour                # hour | day | minute
+      mode: wall_clock            # wall_clock | rolling
+      interval: 1                 # rolling 模式下每 N 个 period 轮转一次
+      daily_at: "00:00"           # day + wall_clock 时每日轮转时刻（HH:MM）

@@ -8,6 +8,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 using namespace std::chrono;
 
@@ -136,6 +138,12 @@ namespace cncpp
 
     private:
         std::atomic<bool> is_running_{false};
+
+        // 信号回调只设此标志 + notify CV，不再直接调 stop()
+        // main() 通过 wait() 阻塞等待此标志
+        std::atomic<bool>       shutdown_requested_{false};
+        mutable std::mutex      stop_mutex_;
+        std::condition_variable stop_cv_;
 
         // 服务启动时间
         std::chrono::steady_clock::time_point app_start_time_ = std::chrono::steady_clock::now();

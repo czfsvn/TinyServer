@@ -35,8 +35,8 @@ services:
 
   # C++ 开发环境服务
   cpp-env:
-    image: ubt-cpp-env:1.0.9
-    container_name: ubt-cpp-env-1-0-9
+    image: ubt-cpp-env:1.0.10
+    container_name: ubt-cpp-env-1-0-10
     volumes:
       - /home/czf/work/docker-cpp-env:/workspace  # 挂载项目目录
     networks:

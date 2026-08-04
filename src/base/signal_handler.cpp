@@ -154,8 +154,12 @@ namespace cncpp
             return;
         }
 
-        // 设置为未初始化状态，防止重复清理
+        // 标记为未初始化，防止重复清理
         initialized_ = false;
+
+        // 如果当前在信号处理线程内，直接跳过 join（防止死锁或自身 join 导致的问题）
+        bool is_self_thread
+            = use_own_thread_ && own_thread_.joinable() && own_thread_.get_id() == std::this_thread::get_id();
 
         if (signal_set_)
         {
@@ -175,34 +179,51 @@ namespace cncpp
 
             if (own_thread_.joinable())
             {
-                try
+                if (is_self_thread)
                 {
-                    // 使用 try_join_for 避免死锁，超时则 detach
-                    auto start = std::chrono::steady_clock::now();
-                    // 轮询等待线程退出（最多等待 1 秒）
-                    while (own_thread_.joinable())
-                    {
-                        auto elapsed = std::chrono::steady_clock::now() - start;
-                        if (elapsed >= std::chrono::seconds(1))
-                        {
-                            LOG_WARN("Signal handler thread join timeout, detaching");
-                            own_thread_.detach();
-                            break;
-                        }
-                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    }
-
-                    LOG_TRACE("Signal handler thread joined");
+                    // 在自身线程内，无法 join 自己，只能 detach
+                    // 此时 io_context 已经 stop，线程会很快退出
+                    own_thread_.detach();
+                    std::cout << "Signal handler thread detached (self-initiated cleanup)\n";
                 }
-                catch (const std::exception& e)
+                else
                 {
-                    LOG_ERROR("Failed to join signal handler thread: {}", e.what());
                     try
                     {
-                        own_thread_.detach();
+                        // 等待线程退出（最多 5 秒）
+                        // 注意：这里不能依赖 LOG_ 宏，因为此时 logger 可能已经被标记为关闭
+                        // 而且绝对不能让 join 超时后 detach 一个还在跑的线程去访问已析构的对象
+                        auto start  = std::chrono::steady_clock::now();
+                        bool joined = false;
+                        while (own_thread_.joinable())
+                        {
+                            auto elapsed = std::chrono::steady_clock::now() - start;
+                            if (elapsed >= std::chrono::seconds(5))
+                            {
+                                std::cerr << "[WARN] Signal handler thread join timeout after "
+                                          << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+                                          << "ms, detaching\n";
+                                own_thread_.detach();
+                                break;
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        }
+                        if (own_thread_.joinable() == false)
+                        {
+                            joined = true;
+                        }
+                        (void)joined;
                     }
-                    catch (...)
+                    catch (const std::exception& e)
                     {
+                        LOG_ERROR("Failed to join signal handler thread: {}", e.what());
+                        try
+                        {
+                            own_thread_.detach();
+                        }
+                        catch (...)
+                        {
+                        }
                     }
                 }
             }

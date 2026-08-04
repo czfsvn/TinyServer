@@ -58,9 +58,8 @@ bool GatewayServer::onStart()
     while (retry_count < max_retry_count)
     {
         is_ready = checkBackendReady();
-        if (checkBackendReady())
+        if (is_ready)
         {
-            is_ready = true;
             break;
         }
 
@@ -319,7 +318,6 @@ bool GatewayServer::startAcceptor()
 
 void GatewayServer::closeAllSessions()
 {
-    sGateTaskManager.stopTaskScheduler();
     LOG_INFO("All tasks stopped");
 }
 

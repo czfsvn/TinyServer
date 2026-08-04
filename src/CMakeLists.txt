@@ -29,6 +29,7 @@ include(${CMAKE_SOURCE_DIR}/../cmake/compiler_options.cmake)
 include(${CMAKE_SOURCE_DIR}/../cmake/find_dependencies.cmake)
 
 add_subdirectory(config)
+add_subdirectory(config/excelpbfiles)
 add_subdirectory(protos)
 add_subdirectory(base)
 add_subdirectory(examples)

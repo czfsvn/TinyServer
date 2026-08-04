@@ -428,6 +428,14 @@ namespace cncpp
 
     void IOContextPool::cleanup()
     {
+        // 幂等保护：cleanup() 可能从多处被调用（start 失败、stop、析构函数），
+        // 只允许执行一次，避免重复释放资源
+        bool expected = false;
+        if (!cleaned_.compare_exchange_strong(expected, true))
+        {
+            return;
+        }
+
         LOG_INFO("Cleaning up IOContextPool");
 
         // 如果还在运行，先停止
@@ -436,10 +444,19 @@ namespace cncpp
             stop();
         }
 
-        // 无论什么状态，都等待线程退出（不持有锁）
+        // 先 join 所有工作线程，再标记 Logger 关闭。
+        // 之前 requestShutdown() 在 joinAllThreads() 之前调用，导致 worker
+        // 线程在 join 阶段无法输出日志——如果某个线程卡住需要调试，
+        // 你已经看不到任何日志了。
+        // 现在 worker 线程可以在整个 join 过程中正常写日志，
+        // join 完成后再关闭日志。
         joinAllThreads();
 
-        // 先清理 SignalHandler（不持有锁）
+        // 所有工作线程已退出，现在标记 Logger 关闭
+        cncpp::Logger::getMe().requestShutdown();
+
+        // 清理 SignalHandler（在所有工作线程退出后）
+        // 此时从主线程调用，可以安全 join 信号线程
         signal_handler_.cleanup();
 
         // 再清理其他资源（持有锁）
@@ -454,7 +471,9 @@ namespace cncpp
             running_.store(false);
         }
 
-        LOG_INFO("IOContextPool cleaned up");
+        // 注意：这里不能再使用 LOG_ 宏，因为 Logger 已被标记为关闭
+        // 请使用 std::cout 输出最后一条信息
+        std::cout << "IOContextPool cleaned up" << std::endl;
     }
 
     IOContextPool::~IOContextPool()

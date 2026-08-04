@@ -15,9 +15,8 @@ target_include_directories(base
         ${MYSQLPP_INCLUDE_DIR}
 )
 
+# 编译选项（Debug/Release 自动适配，由 compiler_options.cmake 控制全局）
 target_compile_options(base PRIVATE
-    -O2
-    -DNDEBUG
     -Wall
     -Wextra
     -Wpedantic
@@ -26,11 +25,20 @@ target_compile_options(base PRIVATE
     -Wno-reorder
 )
 
+# Debug 构建时启用调试信息和优化关闭
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(base PRIVATE -g -O0)
+    target_compile_definitions(base PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
+else()
+    target_compile_options(base PRIVATE -O2 -DNDEBUG)
+    target_compile_definitions(base PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
+endif()
 
 # 链接库
 target_link_libraries(base
     PUBLIC
         spdlog::spdlog
+        yaml-cpp
         Threads::Threads
         ${Boost_LIBRARIES}
         protos
@@ -41,5 +49,5 @@ target_link_libraries(base
 # asio 是 boost 的一部分，定义宏即可
 target_compile_definitions(base
     PUBLIC
-        ASIO_STANDALONE  # 如果使用 standalone asio 才需要，用 boost.asio 则不需要
+        ASIO_STANDALONE
 )
