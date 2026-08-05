@@ -16,7 +16,7 @@ log:
 
   file:
     enabled: true
-    level: debug
+    level: debug                 # trace < debug < info < warn < error <  critical < off(关闭所有日志) 
     dir: ./logs
     filename_prefix: app
     filename_suffix: .log

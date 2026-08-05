@@ -741,8 +741,8 @@ def gen_loadxml_file_impl(class_def: ClassDef, qualified_name: str) -> List[str]
     lines.append('    try')
     lines.append('    {')
     lines.append('        boost::property_tree::ptree tree;')
-    lines.append('        boost::property_tree::read_xml(xml_file_path_, tree);')
-    lines.append('        return loadXml(tree);')
+    lines.append('        boost::property_tree::read_xml(sMainConfig.config_dir.get() + xml_file_path_, tree);')
+    lines.append(f'        return loadXml(tree.get_child("{class_def.class_name}"));')
     lines.append('    }')
     lines.append('    catch (const std::exception& e)')
     lines.append('    {')
@@ -884,6 +884,7 @@ def generate_cpp(result: ParseResult, namespace: str, header_name: str) -> str:
     lines = []
     lines.append(f'#include "{header_name}"')
     lines.append('#include <boost/property_tree/xml_parser.hpp>')
+    lines.append(f'#include "config.h"')
     lines.append('')
     lines.append(f'namespace {namespace}')
     lines.append('{')

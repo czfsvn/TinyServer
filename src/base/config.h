@@ -127,6 +127,7 @@ namespace cncpp
             main_loop_interval_ms.ReadFromTree(tree, "main", "main_loop_interval_ms");
             asio_pool_size.ReadFromTree(tree, "main", "asio_pool_size");
             log_yml_path.ReadFromTree(tree, "main", "log_yml_path");
+            config_dir.ReadFromTree(tree, "main", "config_dir");
         }
 
     public:
@@ -136,6 +137,7 @@ namespace cncpp
         ConfigItem<uint16_t>    main_loop_interval_ms;
         ConfigItem<uint16_t>    asio_pool_size;
         ConfigItem<std::string> log_yml_path;
+        ConfigItem<std::string> config_dir;
     };
 
     // 加密配置类
