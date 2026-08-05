@@ -1,102 +1,18 @@
 #include "signal_handler.h"
 #include <csignal>
-#include <ctime>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include "logger.h"
-
-#ifndef _WIN32
-#include <sys/resource.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#endif
 
 namespace cncpp
 {
     SignalHandler::SignalHandler()
-        : shutdown_requested_(false),
-          signal_set_(nullptr),
-          crash_signal_set_(nullptr),
-          graceful_shutdown_callback_(nullptr),
-          initialized_(false),
-          core_dump_enabled_(false),
-          use_own_thread_(false)
+        : shutdown_requested_(false), signal_set_(nullptr), graceful_shutdown_callback_(nullptr), initialized_(false)
     {
     }
 
     SignalHandler::~SignalHandler()
     {
         // cleanup();
-    }
-
-    bool SignalHandler::init()
-    {
-        if (initialized_)
-        {
-            return true;
-        }
-
-        try
-        {
-            // 创建独立的 io_context 和工作对象
-            own_io_context_ = std::make_unique<boost::asio::io_context>();
-            own_work_       = std::make_unique<boost::asio::io_context::work>(*own_io_context_);
-
-            signal_set_ = std::make_unique<boost::asio::signal_set>(*own_io_context_);
-
-            // 注册要处理的信号
-            signal_set_->add(SIGINT);   // Ctrl+C
-            signal_set_->add(SIGTERM);  // 终止信号
-#ifndef _WIN32
-            signal_set_->add(SIGHUP);   // 终端挂起（Windows不支持）
-            signal_set_->add(SIGUSR1);  // 用户自定义信号1（Windows不支持）
-#endif
-
-            // 开始异步信号处理
-            signal_set_->async_wait([this](const boost::system::error_code& error, int signal) {
-                handleSignal(error, signal);
-            });
-
-            // 设置崩溃信号处理程序
-            crash_signal_set_ = std::make_unique<boost::asio::signal_set>(*own_io_context_);
-#ifndef _WIN32
-            // 注册崩溃信号
-            crash_signal_set_->add(SIGSEGV);  // 段错误
-            crash_signal_set_->add(SIGABRT);  // 异常终止
-            crash_signal_set_->add(SIGFPE);   // 浮点异常
-            crash_signal_set_->add(SIGILL);   // 非法指令
-            crash_signal_set_->add(SIGBUS);   // 总线错误
-
-            crash_signal_set_->async_wait([this](const boost::system::error_code& error, int signal) {
-                if (!error)
-                {
-                    handleCrashSignal(signal);
-                }
-            });
-
-            LOG_INFO("Crash signal handlers registered");
-#endif
-
-            // 启动独立线程来运行 io_context
-            use_own_thread_ = true;
-            own_thread_     = std::thread([this]() {
-                LOG_INFO("Signal handler thread started");
-                own_io_context_->run();
-                LOG_INFO("Signal handler thread stopped");
-            });
-
-            initialized_ = true;
-            LOG_INFO("Signal handler initialized successfully (using own thread)");
-            return true;
-        }
-        catch (const std::exception& e)
-        {
-            LOG_ERROR("Failed to initialize signal handler: {}", e.what());
-            cleanup();
-            return false;
-        }
     }
 
     bool SignalHandler::init(boost::asio::io_context& io_context)
@@ -122,9 +38,6 @@ namespace cncpp
             signal_set_->async_wait([this](const boost::system::error_code& error, int signal) {
                 handleSignal(error, signal);
             });
-
-            // 设置崩溃信号处理程序
-            setupCrashHandlers(io_context);
 
             initialized_ = true;
             LOG_INFO("Signal handler initialized successfully");
@@ -154,181 +67,18 @@ namespace cncpp
             return;
         }
 
-        // 标记为未初始化，防止重复清理
         initialized_ = false;
 
-        // 如果当前在信号处理线程内，直接跳过 join（防止死锁或自身 join 导致的问题）
-        bool is_self_thread
-            = use_own_thread_ && own_thread_.joinable() && own_thread_.get_id() == std::this_thread::get_id();
-
+        // cancel 并销毁 signal_set
+        // 注意：必须在 io_context 销毁之前调用，因为 signal_set 持有 io_context 的引用
         if (signal_set_)
         {
             signal_set_->cancel();
         }
 
-        if (crash_signal_set_)
-        {
-            crash_signal_set_->cancel();
-        }
-
-        // 如果使用了独立线程，需要停止并等待线程结束
-        if (use_own_thread_ && own_io_context_)
-        {
-            own_work_.reset();        // 移除工作对象，允许 io_context 停止
-            own_io_context_->stop();  // 停止 io_context
-
-            if (own_thread_.joinable())
-            {
-                if (is_self_thread)
-                {
-                    // 在自身线程内，无法 join 自己，只能 detach
-                    // 此时 io_context 已经 stop，线程会很快退出
-                    own_thread_.detach();
-                    std::cout << "Signal handler thread detached (self-initiated cleanup)\n";
-                }
-                else
-                {
-                    try
-                    {
-                        // 等待线程退出（最多 5 秒）
-                        // 注意：这里不能依赖 LOG_ 宏，因为此时 logger 可能已经被标记为关闭
-                        // 而且绝对不能让 join 超时后 detach 一个还在跑的线程去访问已析构的对象
-                        auto start  = std::chrono::steady_clock::now();
-                        bool joined = false;
-                        while (own_thread_.joinable())
-                        {
-                            auto elapsed = std::chrono::steady_clock::now() - start;
-                            if (elapsed >= std::chrono::seconds(5))
-                            {
-                                std::cerr << "[WARN] Signal handler thread join timeout after "
-                                          << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-                                          << "ms, detaching\n";
-                                own_thread_.detach();
-                                break;
-                            }
-                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                        }
-                        if (own_thread_.joinable() == false)
-                        {
-                            joined = true;
-                        }
-                        (void)joined;
-                    }
-                    catch (const std::exception& e)
-                    {
-                        LOG_ERROR("Failed to join signal handler thread: {}", e.what());
-                        try
-                        {
-                            own_thread_.detach();
-                        }
-                        catch (...)
-                        {
-                        }
-                    }
-                }
-            }
-        }
-
         signal_set_.reset();
-        crash_signal_set_.reset();
-        own_io_context_.reset();
-        own_work_.reset();
-        initialized_ = false;
+
         std::cout << "Signal handler cleaned up\n";
-    }
-
-    void SignalHandler::enableCoreDump()
-    {
-#ifndef _WIN32
-        struct rlimit rlim;
-        rlim.rlim_cur = RLIM_INFINITY;
-        rlim.rlim_max = RLIM_INFINITY;
-
-        if (setrlimit(RLIMIT_CORE, &rlim) == 0)
-        {
-            core_dump_enabled_ = true;
-            LOG_INFO("Core dump enabled successfully");
-        }
-        else
-        {
-            LOG_ERROR("Failed to enable core dump");
-        }
-#else
-        LOG_WARN("Core dump is not supported on Windows");
-#endif
-    }
-
-    void SignalHandler::setCoreDumpPath(const std::string& path)
-    {
-        core_dump_path_ = path;
-        LOG_INFO("Core dump path set to: " + path);
-    }
-
-    void SignalHandler::setupCrashHandlers(boost::asio::io_context& io_context)
-    {
-#ifndef _WIN32
-        crash_signal_set_ = std::make_unique<boost::asio::signal_set>(io_context);
-
-        // 注册崩溃信号
-        crash_signal_set_->add(SIGSEGV);  // 段错误
-        crash_signal_set_->add(SIGABRT);  // 异常终止
-        crash_signal_set_->add(SIGFPE);   // 浮点异常
-        crash_signal_set_->add(SIGILL);   // 非法指令
-        crash_signal_set_->add(SIGBUS);   // 总线错误
-
-        crash_signal_set_->async_wait([this](const boost::system::error_code& error, int signal) {
-            if (!error)
-            {
-                handleCrashSignal(signal);
-            }
-        });
-
-        LOG_INFO("Crash signal handlers registered");
-#endif
-    }
-
-    void SignalHandler::handleCrashSignal(int signal_number)
-    {
-#ifndef _WIN32
-        // 生成 core dump 文件名
-        std::time_t now        = std::time(nullptr);
-        std::tm*    local_time = std::localtime(&now);
-
-        std::ostringstream oss;
-        if (!core_dump_path_.empty())
-        {
-            oss << core_dump_path_ << "/";
-        }
-        oss << "core." << getpid() << ".";
-        oss << std::put_time(local_time, "%Y%m%d_%H%M%S");
-        oss << "." << signal_number;
-
-        std::string core_file = oss.str();
-
-        LOG_ERROR("Crash signal received: " + std::to_string(signal_number));
-        LOG_ERROR("Attempting to generate core dump: " + core_file);
-
-        // 如果启用了 core dump，系统会自动生成
-        // 这里我们只是记录日志并执行清理操作
-
-        // 调用自定义崩溃处理程序（如果有）
-        auto it = custom_handlers_.find(signal_number);
-        if (it != custom_handlers_.end() && it->second)
-        {
-            it->second();
-        }
-
-        // 执行优雅关闭
-        if (graceful_shutdown_callback_)
-        {
-            LOG_INFO("Executing graceful shutdown callback...");
-            graceful_shutdown_callback_();
-        }
-
-        // 重新触发信号以生成 core dump
-        std::signal(signal_number, SIG_DFL);
-        std::raise(signal_number);
-#endif
     }
 
     void SignalHandler::setCustomSignalHandler(int signal, std::function<void()> handler)

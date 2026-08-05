@@ -1,5 +1,6 @@
 #include "service.h"
 #include "TimeUtils.h"
+#include "crash_handler.h"
 #include "io_context_pool.h"
 #include "logger.h"
 #include "timer_wheel.h"
@@ -20,18 +21,12 @@ namespace cncpp
         }
         else
         {
-            // 即使没有运行，也需要清理 IOContextPool（可能初始化了但未运行）
+            // 安全网：如果 stop() 未被调用，在此清理
+            // 顺序：signal_handler 先于 IOContextPool，因为 signal_set 持有 main_io_context 的引用
             // cleanup() 内部有幂等保护，重复调用安全
+            signal_handler_.cleanup();
             sIOContextPool.cleanup();
         }
-        // 注意：不在这里调用 sLogger.shutdown()。
-        // sLogger.shutdown() 内部会调用 spdlog::shutdown()，访问 spdlog 的全局
-        // registry 静态对象。此处处于全局析构阶段，spdlog 的 registry 可能已经
-        // 被析构（跨 TU 析构顺序未定义），调用 spdlog::shutdown() 会访问已释放
-        // 的内存 → UB。
-        // 正确做法是由 main() 在返回前调用 sLogger.shutdown()，此时全局析构尚未
-        // 开始，调用顺序确定。shutdown() 本身有幂等保护，main() 调过后再来这里
-        // 也是空操作。若 main() 未能调用（异常退出），则由 OS 回收资源。
     }
 
     bool Service::run(int argc, char* argv[])
@@ -56,6 +51,7 @@ namespace cncpp
         if (!sIOContextPool.init())
         {
             LOG_ERROR("Failed to init IOContextPool");
+            sLogger.shutdown();
             return false;
         }
 
@@ -63,60 +59,64 @@ namespace cncpp
         loadGameConfigs();
 
         // 调用派生类初始化
-        if (!onInit())
+        if (!onInit() || !start())
         {
             LOG_ERROR("Derived class init failed");
+            signal_handler_.cleanup();
+            sIOContextPool.cleanup();
+            sLogger.shutdown();
             return false;
         }
 
-        sTimerManager.init();
+        LOG_DEBUG("[Service] run end");
 
-        // 注意：必须把 start() 的返回值原样返回。
-        // 之前这里直接 return true，导致 onStart() 失败时 main() 以为启动成功，
-        // 后续析构序列进入和设计不同的状态，是导致退出段错误的关键一环。
-        return start();
+        // start() 返回意味着 sIOContextPool.run() 已退出（信号回调已调 stop()）
+        // 直接执行完整清理
+        waitForStop();
+
+        return true;
     }
 
     bool Service::start()
     {
         LOG_INFO("Starting Service...");
-        sIOContextPool.setGracefulShutdownCallback([this]() {
-            // 信号线程只设标志 + 唤醒主线程，不调 stop()。
-            // 这样所有清理工作（onStop、cleanup、signal_handler_.cleanup）
-            // 都在主线程上执行，避免信号线程自毁 io_context 的 UB。
-            LOG_INFO("Graceful shutdown requested via signal");
-            {
-                // 持锁修改共享状态，防止 wait() 谓词检查与 notify 之间的竞态
-                std::lock_guard<std::mutex> lock(stop_mutex_);
-                shutdown_requested_.store(true);
-            }
-            stop_cv_.notify_all();
-        });
 
-        sIOContextPool.enableCoreDump();
+        // 使用 IOContextPool 的 main_io_context 注册信号处理
+        // 这样信号回调会作为 asio handler 运行在 main_io_context 的线程上（即主线程），
+        // 回调里调 sIOContextPool.stop() 可以让 main_io_context_->run() 返回，
+        // 从而让 start() → run() 返回，run() 内部自动调 waitForStop() 完成清理。
+        if (!signal_handler_.init(sIOContextPool.getMainIOContext()))
+        {
+            LOG_ERROR("Failed to init signal handler");
+            return false;
+        }
+        // 初始化崩溃处理（崩溃信号用平台原生同步机制，不走 io_context）
+        CrashHandler::init();
+
+        // 信号回调：调用 sIOContextPool.stop() 停止所有 io_context
+        // main_io_context_->run() 会在此回调返回后退出，
+        // 从而 start() → run() 返回，run() 内部自动调 waitForStop() 完成清理
+        signal_handler_.setGracefulShutdownCallback([]() {
+            LOG_INFO("Graceful shutdown requested via signal");
+            sIOContextPool.stop();
+        });
 
         // 调用派生类启动
         if (!onStart())
         {
             LOG_ERROR("Derived class start failed");
-            // 启动失败：让派生类先清理自己的资源（onStop），
-            // 然后标记 is_running_ 让析构函数去统一清理 IOContextPool。
-            // 不要在这里直接 cleanup，否则会过早释放 io_context，
-            // 导致全局成员（如 acceptor_/tiny_client_/data_client_）析构时
-            // 访问已销毁的 io_context 而崩溃。
             LOG_INFO("Cleaning up after failed start...");
             is_running_.store(false);
             onStop();
             return false;
         }
 
+        sTimerManager.init();
         sIOContextPool.setTimerCallback(std::bind(&Service::tick, this), getMainLoopIntervalMs());
 
         is_running_.store(true);
-        sIOContextPool.run();
-        // stop();
+        sIOContextPool.run();  // 阻塞在 main_io_context_->run()，信号回调会调 stop() 使其返回
 
-        // LOG_INFO("Service started successfully");
         return true;
     }
 
@@ -130,28 +130,33 @@ namespace cncpp
             return;
         }
 
-        // 调用派生类停止（在 requestShutdown 之前）
+        // 1. 派生类停止（可以写日志）
         onStop();
 
-        // 先停止定时器（在 requestShutdown 之前）
+        // 2. 停止定时器
         sTimerManager.stop();
 
-        // 不再使用 sleep_for(100ms) 等待异步操作完成。
-        // onStop() 中的 disconnect/reset 会同步关闭 socket，
-        // 后续 cleanup() 会 stop io_context 并 join 线程，
-        // 已排队的事件处理器会在 io_context::stop() 后执行完毕。
         LOG_INFO("Service stopped successfully");
 
-        // 清理 IOContextPool（内部会调用 requestShutdown，此后 LOG_ 宏返回 nullptr）
+        // 3. 清理信号处理器（必须在 IOContextPool 之前！）
+        //    signal_set 持有 main_io_context 的引用，如果 main_io_context 先被销毁，
+        //    signal_set_->cancel() / reset() 会访问已释放内存 → UB
+        signal_handler_.cleanup();
+
+        // 4. 清理 IOContextPool（stop io_context → join 线程 → requestShutdown logger → clear）
         sIOContextPool.cleanup();
     }
 
-    void Service::wait()
+    void Service::waitForStop()
     {
-        std::unique_lock<std::mutex> lock(stop_mutex_);
-        stop_cv_.wait(lock, [this]() {
-            return shutdown_requested_.load();
-        });
+        LOG_DEBUG("[Service] waitForStop start");
+
+        // 执行全部清理（onStop → timer → signal_handler → IOContextPool）
+        stop();
+        // 在 main() 返回前彻底关闭 logger（必须在全局析构前完成）
+        sLogger.shutdown();
+
+        std::cout << "[Service] waitForStop end" << std::endl;
     }
 
     uint64_t Service::getMainLoopIntervalMs() const

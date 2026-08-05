@@ -11,10 +11,9 @@
 #include <thread>
 #include <vector>
 #include "network.h"
-#include "signal_handler.h"
 #include "singleton.h"
 
-#define USING_BOOST_ASIO_TIMER 0
+#define USING_BOOST_ASIO_TIMER 1
 
 namespace cncpp
 {
@@ -25,24 +24,6 @@ namespace cncpp
     public:
         // 初始化池（必须在程序开始时调用）
         bool init();
-
-        // 初始化信号处理
-        bool initSignalHandler();
-
-        // 设置优雅关闭回调
-        void setGracefulShutdownCallback(std::function<void()> callback);
-
-        // 启用 core dump 生成
-        void enableCoreDump();
-
-        // 设置 core dump 文件路径
-        void setCoreDumpPath(const std::string& path);
-
-        // 设置自定义信号处理回调
-        void setCustomSignalHandler(int signal, std::function<void()> handler);
-
-        // 检查是否收到关闭信号
-        bool isShutdownRequested() const;
 
         // 获取一个io_context（轮询方式）
         boost::asio::io_context& getIoContext();
@@ -143,9 +124,6 @@ namespace cncpp
         uint64_t                              last_call_back_{0};
         uint64_t                              current_tick_ms_ = 0;
         std::chrono::steady_clock::time_point next_expire_time_;
-
-        // 信号处理器
-        SignalHandler signal_handler_;
     };
 
 }  // namespace cncpp

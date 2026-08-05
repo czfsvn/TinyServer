@@ -3,7 +3,6 @@
 #include "Misc.h"
 #include "TimeUtils.h"
 #include "logger.h"
-#include "signal_handler.h"
 #include "timer_wheel.h"
 
 namespace cncpp
@@ -54,22 +53,6 @@ namespace cncpp
             initialized_ = true;
             LOG_INFO("IOContextPool initialized with " + std::to_string(pool_size) + " contexts");
 
-            // 自动初始化信号处理（使用独立线程，不依赖任何 io_context）
-            // 这样可以避免信号处理与 io_context 停止之间的死锁
-            if (!signal_handler_.init())
-            {
-                LOG_WARN("Failed to initialize signal handler (this may cause issues with graceful shutdown)");
-            }
-            else
-            {
-                // 设置默认的优雅关闭回调
-                signal_handler_.setGracefulShutdownCallback([this]() {
-                    LOG_INFO("Graceful shutdown requested via signal");
-                    this->stop();
-                });
-                LOG_INFO("Signal handler initialized with default callback");
-            }
-
             runIOContextPools();
             return true;
         }
@@ -79,53 +62,6 @@ namespace cncpp
             io_contexts_.clear();
             return false;
         }
-    }
-
-    bool IOContextPool::initSignalHandler()
-    {
-        LOG_INFO("Initializing signal handler");
-
-        // 使用成员变量 signal_handler_，传入第一个 io_context
-        if (!signal_handler_.init(*io_contexts_[0].context))
-        {
-            LOG_ERROR("Failed to initialize signal handler");
-            return false;
-        }
-
-        // 设置默认的优雅关闭回调
-        signal_handler_.setGracefulShutdownCallback([this]() {
-            LOG_INFO("Graceful shutdown requested via signal");
-            this->stop();
-        });
-
-        LOG_INFO("Signal handler initialized");
-        return true;
-    }
-
-    void IOContextPool::setGracefulShutdownCallback(std::function<void()> callback)
-    {
-        signal_handler_.setGracefulShutdownCallback(callback);
-    }
-
-    void IOContextPool::enableCoreDump()
-    {
-        signal_handler_.enableCoreDump();
-        LOG_INFO("Core dump enabled");
-    }
-
-    void IOContextPool::setCoreDumpPath(const std::string& path)
-    {
-        signal_handler_.setCoreDumpPath(path);
-    }
-
-    void IOContextPool::setCustomSignalHandler(int signal, std::function<void()> handler)
-    {
-        signal_handler_.setCustomSignalHandler(signal, handler);
-    }
-
-    bool IOContextPool::isShutdownRequested() const
-    {
-        return signal_handler_.isShutdownRequested();
     }
 
     void IOContextPool::mainLoop()
@@ -156,7 +92,6 @@ namespace cncpp
         {
             while (running_.load())
             {
-                /* code */
                 cncpp::sleepfor_milliseconds(interval_ms_ / 5);
                 updateTimer();
             }
@@ -170,7 +105,7 @@ namespace cncpp
         {
             if (current_tick_ms_ - last_call_back_ >= interval_ms_)
             {
-                LOG_TRACE("[IOContextPool][updateTimer] call_time={}", current_tick_ms_);
+                LOG_INFO("[IOContextPool][updateTimer] call_time={}", current_tick_ms_);
                 timer_callback_();
                 last_call_back_ = current_tick_ms_;
             }
@@ -188,6 +123,11 @@ namespace cncpp
         timer_callback_ = callback;
         if (interval_ms > 0)
             interval_ms_ = interval_ms;
+    }
+
+    boost::asio::io_context& IOContextPool::getMainIOContext()
+    {
+        return *main_io_context_;
     }
 
     boost::asio::io_context& IOContextPool::getIoContext()
@@ -226,7 +166,6 @@ namespace cncpp
     {
         LOG_INFO("Starting IOContextPool with " + std::to_string(io_contexts_.size()) + " threads");
 
-        // 修复后的代码（第119行附近）：
         for (size_t i = 0; i < io_contexts_.size(); ++i)
         {
             auto& wrapper  = io_contexts_[i];
@@ -234,8 +173,6 @@ namespace cncpp
                 try
                 {
                     LOG_TRACE("IOContext thread " + std::to_string(i) + " started.");
-
-                    // 通过索引安全访问，避免悬空引用
                     LOG_DEBUG("IOContext thread " + std::to_string(i) + " entering run loop");
                     io_contexts_[i].context->run();
                     LOG_TRACE("IOContext thread " + std::to_string(i) + " run loop exited");
@@ -324,7 +261,6 @@ namespace cncpp
         {
             auto& wrapper = io_contexts_[i];
 
-            // 检查线程是否可 join（避免对已 detach 的线程操作）
             if (!wrapper.thread.joinable())
             {
                 LOG_DEBUG("Worker thread {} not joinable, skipping", i);
@@ -335,7 +271,6 @@ namespace cncpp
 
             try
             {
-                // 使用带超时的轮询方式，避免无限等待
                 auto start    = std::chrono::steady_clock::now();
                 bool detached = false;
 
@@ -351,7 +286,6 @@ namespace cncpp
                         break;
                     }
 
-                    // 回退到短时间 sleep 后重试
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
 
@@ -363,7 +297,6 @@ namespace cncpp
             catch (const std::exception& e)
             {
                 LOG_ERROR("Failed to join worker thread {}: {}", i, e.what());
-                // 尝试 detach 避免资源泄漏
                 if (wrapper.thread.joinable())
                 {
                     try
@@ -387,7 +320,6 @@ namespace cncpp
             return;
         }
 
-        // 等待状态变为 Stopped（在锁内等待）
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [this]() {
@@ -406,7 +338,6 @@ namespace cncpp
             return true;
         }
 
-        // 等待状态变为 Stopped（在锁内等待）
         bool stopped;
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -428,8 +359,7 @@ namespace cncpp
 
     void IOContextPool::cleanup()
     {
-        // 幂等保护：cleanup() 可能从多处被调用（start 失败、stop、析构函数），
-        // 只允许执行一次，避免重复释放资源
+        // 幂等保护
         bool expected = false;
         if (!cleaned_.compare_exchange_strong(expected, true))
         {
@@ -438,28 +368,18 @@ namespace cncpp
 
         LOG_INFO("Cleaning up IOContextPool");
 
-        // 如果还在运行，先停止
         if (stop_state_.load() == StopState::Running)
         {
             stop();
         }
 
-        // 先 join 所有工作线程，再标记 Logger 关闭。
-        // 之前 requestShutdown() 在 joinAllThreads() 之前调用，导致 worker
-        // 线程在 join 阶段无法输出日志——如果某个线程卡住需要调试，
-        // 你已经看不到任何日志了。
-        // 现在 worker 线程可以在整个 join 过程中正常写日志，
-        // join 完成后再关闭日志。
+        // join 所有工作线程（join 过程中 worker 仍可写日志）
         joinAllThreads();
 
-        // 所有工作线程已退出，现在标记 Logger 关闭
+        // 所有工作线程已退出，标记 Logger 关闭
         cncpp::Logger::getMe().requestShutdown();
 
-        // 清理 SignalHandler（在所有工作线程退出后）
-        // 此时从主线程调用，可以安全 join 信号线程
-        signal_handler_.cleanup();
-
-        // 再清理其他资源（持有锁）
+        // 清理其他资源
         {
             std::lock_guard<std::mutex> lock(mutex_);
             io_contexts_.clear();
@@ -471,8 +391,6 @@ namespace cncpp
             running_.store(false);
         }
 
-        // 注意：这里不能再使用 LOG_ 宏，因为 Logger 已被标记为关闭
-        // 请使用 std::cout 输出最后一条信息
         std::cout << "IOContextPool cleaned up" << std::endl;
     }
 

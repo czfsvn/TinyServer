@@ -8,8 +8,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
-#include <mutex>
+
+#include "signal_handler.h"
 
 using namespace std::chrono;
 
@@ -54,11 +54,6 @@ namespace cncpp
      * @brief 停止服务
      */
         void stop();
-
-        /**
-     * @brief 等待服务停止
-     */
-        void wait();
 
         /**
      * @brief 检查服务是否运行中
@@ -137,13 +132,16 @@ namespace cncpp
         }
 
     private:
+        /**
+     * @brief 执行完整清理（stop + sLogger.shutdown）
+     * run() 在 sIOContextPool.run() 返回后自动调用
+     */
+        void waitForStop();
+
         std::atomic<bool> is_running_{false};
 
-        // 信号回调只设此标志 + notify CV，不再直接调 stop()
-        // main() 通过 wait() 阻塞等待此标志
-        std::atomic<bool>       shutdown_requested_{false};
-        mutable std::mutex      stop_mutex_;
-        std::condition_variable stop_cv_;
+        // 信号处理器（直接持有，不再通过 IOContextPool 转发）
+        SignalHandler signal_handler_;
 
         // 服务启动时间
         std::chrono::steady_clock::time_point app_start_time_ = std::chrono::steady_clock::now();

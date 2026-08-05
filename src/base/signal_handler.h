@@ -5,20 +5,25 @@
 #include <boost/asio/signal_set.hpp>
 #include <functional>
 #include <memory>
-#include <thread>
+#include <string>
+#include <unordered_map>
 
 namespace cncpp
 {
+    /// 普通信号处理器（SIGINT/SIGTERM/SIGHUP/SIGUSR1）
+    /// 经 boost::asio::signal_set 异步处理，handler 运行在 io_context 线程上。
+    ///
+    /// 崩溃信号（SIGSEGV/SIGABRT 等）已移至 CrashHandler，用平台原生同步机制处理，
+    /// 绝不经过 io_context（崩溃时 io_context 可能已不可用）。
     class SignalHandler
     {
     public:
         SignalHandler();
         ~SignalHandler();
 
-        // 初始化信号处理（使用独立线程）
-        bool init();
-
         // 初始化信号处理（使用传入的 io_context）
+        // signal_set 注册在此 io_context 上，
+        // 信号到达时 handleSignal 作为 asio handler 在该 io_context 的线程上执行
         bool init(boost::asio::io_context& io_context);
 
         // 检查是否收到关闭信号
@@ -27,14 +32,9 @@ namespace cncpp
         // 请求关闭
         void requestShutdown();
 
-        // 清理资源
+        // 清理资源（cancel signal_set 并 reset）
+        // 注意：必须在 io_context 销毁之前调用，因为 signal_set 持有 io_context 的引用
         void cleanup();
-
-        // 启用 core dump 生成
-        void enableCoreDump();
-
-        // 设置 core dump 文件路径
-        void setCoreDumpPath(const std::string& path);
 
         // 设置自定义信号处理回调
         void setCustomSignalHandler(int signal, std::function<void()> handler);
@@ -43,30 +43,14 @@ namespace cncpp
         void setGracefulShutdownCallback(std::function<void()> callback);
 
     private:
-        // 信号处理函数
+        // 信号处理函数（作为 asio handler 运行）
         void handleSignal(const boost::system::error_code& error, int signal_number);
 
-        // 运行信号处理循环
-        void runSignalLoop();
-
-        // 处理崩溃信号（生成 core dump）
-        void handleCrashSignal(int signal_number);
-
-        // 设置崩溃信号处理程序
-        void setupCrashHandlers(boost::asio::io_context& io_context);
-
         std::atomic<bool>                              shutdown_requested_;
-        std::unique_ptr<boost::asio::io_context>       own_io_context_;
-        std::unique_ptr<boost::asio::io_context::work> own_work_;
-        std::thread                                    own_thread_;
         std::unique_ptr<boost::asio::signal_set>       signal_set_;
-        std::unique_ptr<boost::asio::signal_set>       crash_signal_set_;
         std::function<void()>                          graceful_shutdown_callback_;
         std::unordered_map<int, std::function<void()>> custom_handlers_;
-        std::string                                    core_dump_path_;
         bool                                           initialized_;
-        bool                                           core_dump_enabled_;
-        bool                                           use_own_thread_;
     };
 
 }  // namespace cncpp

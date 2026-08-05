@@ -64,6 +64,9 @@ void ProcessAllSessionQueues()
 {
     if (!sIOContextPool.isShutdownRequested())
     {
+        // 注意：isShutdownRequested() 已移至 SignalHandler
+        // 此 example 文件使用旧 API，需整体更新
+    {
         // 使用会话管理器处理所有会话的消息队列
         session_manager.ProcessAllSessionQueues<NetworkMessage>(ProcessMessage);
 
@@ -234,12 +237,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // 启用 core dump 生成
-    sIOContextPool.enableCoreDump();
-
-    // 设置 core dump 文件路径（可选）
-    std::string core_dump_path = "./coredumps";
-    sIOContextPool.setCoreDumpPath(core_dump_path);
+    // 崩溃处理（core dump + backtrace）已移至 CrashHandler
+    // CrashHandler::init() 在 Service::start() 中自动调用，无需手动设置
+    // 详见 base/crash_handler.h
 
 #ifndef _WIN32
     // 创建 core dump 目录（如果不存在）
@@ -256,12 +256,12 @@ int main(int argc, char* argv[])
         }
     }
 #endif
-    sIOContextPool.setGracefulShutdownCallback(GracefulShutdown);
+    // sIOContextPool.setGracefulShutdownCallback(GracefulShutdown);
 
     // 自定义信号处理
-    sIOContextPool.setCustomSignalHandler(SIGUSR1, []() {
-        // 自定义逻辑
-    });
+    // sIOContextPool.setCustomSignalHandler(SIGUSR1, []() {
+    //     // 自定义逻辑
+    // });
 
     // 如果是daemon模式，进行后台运行
     if (daemon_mode)

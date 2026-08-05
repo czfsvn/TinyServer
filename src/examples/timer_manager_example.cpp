@@ -68,7 +68,7 @@ int main(int argc, char* argv[])
     }
 
     // 初始化日志系统
-    sLogger.init();
+    sLogger.init({});
 
     // 初始化 IO 上下文池
     if (!sIOContextPool.init())

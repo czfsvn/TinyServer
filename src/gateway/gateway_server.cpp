@@ -36,8 +36,6 @@ bool GatewayServer::onInit()
         return false;
     }
 
-    sGateTaskManager.startTaskScheduler();
-
     LOG_INFO("GatewayServer initialized successfully");
     return true;
 }
@@ -46,13 +44,15 @@ bool GatewayServer::onStart()
 {
     LOG_INFO("GatewayServer starting...");
 
+    sGateTaskManager.startTaskScheduler();
+
     if (!connectToBackendServers())
     {
         LOG_ERROR("Failed to connect to backend servers");
         return false;
     }
 
-    const uint32_t max_retry_count = 10;
+    const uint32_t max_retry_count = 5;
     uint32_t       retry_count     = 0;
     bool           is_ready        = false;
     while (retry_count < max_retry_count)
@@ -63,7 +63,7 @@ bool GatewayServer::onStart()
             break;
         }
 
-        cncpp::sleepfor_seconds(3);
+        cncpp::sleepfor_seconds(2);
         retry_count++;
     }
 

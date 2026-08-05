@@ -46,6 +46,15 @@ target_link_libraries(base
         ${MYSQLPP_LIBRARY}
 )
 
+# 平台相关：崩溃处理
+# Linux: -rdynamic 让 backtrace_symbols 能解析函数名（通过 INTERFACE 传播给可执行文件）
+# Windows: 链接 dbghelp（MiniDumpWriteDump）
+if(WIN32)
+    target_link_libraries(base PUBLIC dbghelp)
+else()
+    target_link_libraries(base INTERFACE "-Wl,--export-dynamic")
+endif()
+
 # asio 是 boost 的一部分，定义宏即可
 target_compile_definitions(base
     PUBLIC
