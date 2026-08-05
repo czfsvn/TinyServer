@@ -159,7 +159,7 @@ int main()
 {
     const std::string path = "/workspace/myserver/src/tools/logs";
     // 初始化 logger
-    if (!sLogger.init())
+    if (!sLogger.init({}))
     {
         std::cerr << "Logger initialization failed!" << std::endl;
         return 1;
