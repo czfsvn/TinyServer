@@ -21,11 +21,12 @@ namespace cncpp
     class MysqlConn
     {
     public:
-    public:
-        bool isConnected()
-        {
-            return true;
-        }
+        /// @brief 连接是否仍然建立着
+        ///
+        /// 弱信号：只说明「上一次通信之后连接没断」，测不出 TCP 半开、也测不出对端
+        /// wait_timeout 已经把连接掐掉。连接池用它丢弃死连接并重建（见 MyConnPool::grab），
+        /// 业务代码不要拿它当探活结果。
+        bool isConnected();
 
         // 初始化连接（RAII）
         explicit MysqlConn(const cncpp::MysqlConfig& config);
@@ -76,8 +77,13 @@ namespace cncpp
                     query << " WHERE " << where;
                 }
 
-                std::vector<DB> res;
-                query.storein(res);
+                mysqlpp::StoreQueryResult rows = query.store();
+                std::vector<DB>           res;
+                res.reserve(rows.num_rows());
+                for (const mysqlpp::Row& row : rows)
+                {
+                    res.push_back(DB::from_row(row));
+                }
                 return res;
             }
             catch (const mysqlpp::BadQuery& er)
@@ -116,7 +122,6 @@ namespace cncpp
 
             try
             {
-                const std::string field_str = DB::field_list();
                 query << "REPLACE INTO `" << DB::table() << "` (" << DB::field_list() << ") VALUES";
                 const std::string head_str = query.str();
 
@@ -128,7 +133,9 @@ namespace cncpp
                         query << ",";
 
                     readycount++;
-                    query << "(" << item.value_list() << ")";
+                    query << "(";
+                    item.value_list(query);
+                    query << ")";
                     if (query.str().size() > max_safe_packet_size)
                     {
                         mysqlpp::SimpleResult res = query.execute();
@@ -189,10 +196,11 @@ namespace cncpp
 
             try
             {
-                const std::string field_str = DB::field_list();
                 query << "REPLACE INTO `" << DB::table() << "` (" << DB::field_list() << ") VALUES";
                 // const std::string head_str = query.str();
-                query << "(" << data.value_list() << ")";
+                query << "(";
+                data.value_list(query);
+                query << ")";
 
                 mysqlpp::SimpleResult res = query.execute();
                 if (!res)
@@ -232,7 +240,6 @@ namespace cncpp
 
             try
             {
-                const std::string field_str = DB::field_list();
                 query << "DELETE FROM `" << DB::table() << "`";
                 if (where.size())
                     query << " where " << where;
@@ -268,95 +275,14 @@ namespace cncpp
             return 0;
         }
 
-        template <typename DB, typename Container>
-        uint32_t deleteWhereByKeys(const std::string& keyname, const Container& cont)
-        {
-            if (keyname.empty || cont.empty())
-                return 0;
-
-            const uint32_t max_safe_packet_size = getMaxSafeMysqlPacketSize();
-            if (!max_safe_packet_size)
-                return 0;
-
-            mysqlpp::Query query          = m_conn.query();
-            uint32_t       afffected_rows = 0;
-
-            try
-            {
-                const std::string field_str = DB::field_list();
-                query << "DELETE FROM `" << DB::table() << "` WHERE " << keyname << " IN(";
-                const std::string header_str = query.str();
-
-                bool isfirst = true;
-                for (const auto& key : cont)
-                {
-                    if (isfirst)
-                    {
-                        query << "`" << key << "`";
-                        isfirst = false;
-                    }
-                    else
-                    {
-                        query << ",`" << key << "`";
-                    }
-
-                    if (query.str().size() >= max_safe_packet_size)
-                    {
-                        query << ")";
-
-                        mysqlpp::SimpleResult res = query.execute();
-                        if (!res)
-                        {
-                            LOG_ERROR("[MysqlConn][deleteWhereByKeys] error, query={}, afffected_rows={}", query.str(),
-                                      afffected_rows);
-                            return afffected_rows;
-                        }
-
-                        afffected_rows += res.rows();
-                        query = m_conn.query();
-                        query << header_str;
-                        isfirst = true;
-                    }
-                }
-
-                if (!isfirst)
-                {
-                    query << ")";
-
-                    mysqlpp::SimpleResult res = query.execute();
-                    if (!res)
-                    {
-                        LOG_ERROR("[MysqlConn][deleteWhereByKeys] error, query={}, afffected_rows={}", query.str(),
-                                  afffected_rows);
-                        return afffected_rows;
-                    }
-
-                    afffected_rows += res.rows();
-                }
-
-                return afffected_rows;
-            }
-            catch (const mysqlpp::BadQuery& er)
-            {
-                LOG_ERROR("[MysqlConn][deleteWhereByKeys] BadQuery err: {}, query={}", er.what(), query.str());
-                return -1;
-            }
-            catch (const mysqlpp::BadConversion& er)
-            {
-                LOG_ERROR(
-                    "[MysqlConn][deleteWhereByKeys] Conversion error: {}, retrieved data size: {}, actual "
-                    "size: {}, , query={}",
-                    er.what(), er.retrieved, er.actual_size, query.str());
-                return -1;
-            }
-            catch (const mysqlpp::Exception& er)
-            {
-                LOG_ERROR("[MysqlConn][deleteWhereByKeys] Error: {}, , query={}", er.what(), query.str());
-                return -1;
-            }
-
-            return 0;
-        }
+        // 注：原 deleteWhereByKeys() 已于 2026-09-11 删除。
+        //   删除原因：经全仓库检索确认【从未被任何代码调用】（100% 死代码），
+        //             且实现存在两处错误：
+        //               1) keyname.empty 漏写括号（应为 empty()），函数体语法非法；
+        //               2) 给「值」加反引号（反引号是标识符引用符，用于值上非法）。
+        //             因是函数模板且从未实例化，上述错误始终未被编译器诊断。
+        //   替代能力：由 xml2db 生成的 DAO 提供，
+        //             见 src/database/dbtables/<table>.h 的 deleteByKey()。
 
         // 执行更新（INSERT/UPDATE/DELETE）
         size_t execute(const std::string& sql, const mysqlpp::SQLTypeAdapter& params = {});

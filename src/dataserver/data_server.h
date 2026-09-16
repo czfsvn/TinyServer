@@ -30,7 +30,8 @@ private:
     void stopAcceptor();
     void closeAllSessions();
 
-    void checkMysql();
+    bool checkMysql();
+    bool syncTableSchema();
 
 private:
     std::shared_ptr<cncpp::Acceptor> acceptor_;

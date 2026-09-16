@@ -250,7 +250,7 @@ namespace cncpp
         stop_state_.store(StopState::Stopped);
         cv_.notify_all();
 
-        LOG_INFO("IOContextPool stopped");
+    LOG_INFO("IOContextPool stopped");
     }
 
     void IOContextPool::joinAllThreads()

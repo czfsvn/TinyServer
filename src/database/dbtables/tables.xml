@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tables>
+
+    <table name="Stock" keys="item_id" comment="">
+
+        <column index="1" field="item_id" type="std::string" comment="物品id" />
+        <column index="2" field="num" type="uint64_t" comment="数量" />
+        <column index="3" field="weight" type="double" comment="权重" />
+        <column index="4" field="price" type="float" comment="价格" />
+        <column index="5" field="description" type="std::string" comment="描述" />
+
+    </table>
+
+</tables>

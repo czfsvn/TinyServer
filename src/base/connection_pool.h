@@ -2,8 +2,11 @@
 
 #include <assert.h>
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <list>
+#include <stdexcept>
+#include <thread>
 
 #include "singleton.h"
 
@@ -86,18 +89,41 @@ namespace cncpp
             return grab();
         }
 
+        /// \brief 取一条可用连接
+        ///
+        /// 取到的连接若已断开（isConnected() 为假），丢弃后重建并重试，最多尝试 max_grab_retry() 次；
+        /// 仍失败才抛 std::runtime_error。
+        ///
+        /// 不变式：**grab() 成功返回 ⇒ 连接可用**。调用方拿到连接即可使用，不必再自行探活。
         virtual CONN* grab()
         {
-            std::lock_guard<std::mutex> lock(mutex_);  // ensure we're not interfered with
-            remove_old_connections();
-            if (CONN* mru = find_mru())
+            const unsigned int max_attempt = max_grab_retry();
+            for (unsigned int attempt = 1;; ++attempt)
             {
-                return mru;
-            }
-            else
-            {
-                pool_.push_back(ConnectionInfo(create()));
-                return pool_.back().conn;
+                CONN* conn = 0;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);  // ensure we're not interfered with
+                    remove_old_connections();
+                    if (CONN* mru = find_mru())
+                    {
+                        conn = mru;
+                    }
+                    else
+                    {
+                        pool_.push_back(ConnectionInfo(create()));
+                        conn = pool_.back().conn;
+                    }
+                }
+
+                if (conn->isConnected())
+                    return conn;
+
+                // 死连接：摘掉再重试。remove() 自己加锁，故上面用块先把临界区收窄
+                remove(conn);
+                if (attempt >= max_attempt)
+                    throw std::runtime_error("MyConnPool::grab: 无法取得可用连接");
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(grab_retry_interval_ms()));
             }
         }
 
@@ -128,17 +154,6 @@ namespace cncpp
                     return;
                 }
             }
-        }
-
-        virtual CONN* safe_grab()
-        {
-            CONN* pc;
-            while (!(pc = grab())->isConnected())
-            {
-                remove(pc);
-                pc = 0;
-            }
-            return pc;
         }
 
         void shrink()
@@ -180,6 +195,21 @@ namespace cncpp
         virtual unsigned int max_idle_time()
         {
             return 300;
+        };
+
+        /// \brief grab() 允许的尝试次数（含第一次）
+        ///
+        /// 只有「新建的连接也是死的」才会走到第二次，因此这是对端故障时的上限，
+        /// 不是正常情况下的循环。
+        virtual unsigned int max_grab_retry()
+        {
+            return 3;
+        };
+
+        /// \brief grab() 两次尝试之间的退避毫秒数
+        virtual unsigned int grab_retry_interval_ms()
+        {
+            return 200;
         };
 
         size_t size() const
@@ -228,8 +258,8 @@ namespace cncpp
     public:
         using CONN = T;
 
-        explicit MyScopedConn(MyConnPool<CONN, CONFIG>* pool = &MyConnPool<CONN, CONFIG>::getMe(), bool safe = false)
-            : pool_(pool), connection_(safe ? pool->safe_grab() : pool->grab())
+        explicit MyScopedConn(MyConnPool<CONN, CONFIG>* pool = &MyConnPool<CONN, CONFIG>::getMe())
+            : pool_(pool), connection_(pool->grab())
         {
         }
 

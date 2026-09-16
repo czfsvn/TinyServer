@@ -23,6 +23,11 @@ namespace cncpp
         }
     }
 
+    bool MysqlConn::isConnected()
+    {
+        return m_conn.connected();
+    }
+
     MysqlConn::~MysqlConn()
     {
         if (m_inTransaction)

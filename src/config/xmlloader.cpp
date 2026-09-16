@@ -1,4 +1,5 @@
 #include "xmlloader.h"
+#include "config.h"
 #include "xmlfiles/CampofficialPromote.h"
 
 xml::CampofficialPromote campofficialpromote;
