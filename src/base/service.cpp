@@ -1,9 +1,9 @@
 #include "service.h"
-#include "TimeUtils.h"
 #include "crash_handler.h"
 #include "io_context_pool.h"
 #include "logger.h"
 #include "timer_wheel.h"
+#include "TimeUtils.h"
 
 namespace cncpp
 {
@@ -111,7 +111,8 @@ namespace cncpp
             return false;
         }
 
-        sTimerManager.init();
+        // 时间轮的一格 = 主循环周期, 见 ADR-0001
+        sTimerManager.init(getMainLoopIntervalMs());
         sIOContextPool.setTimerCallback(std::bind(&Service::tick, this), getMainLoopIntervalMs());
 
         is_running_.store(true);

@@ -1,4 +1,6 @@
 #include "network.h"
+#include <cstring>
+
 #include "config.h"
 #include "message_handler.h"
 
@@ -23,21 +25,19 @@ namespace cncpp
 
     void Session::start()
     {
+        boost::system::error_code ec;
+        remote_endpoint_ = socket_.remote_endpoint(ec);
+        if (ec)
+        {
+            LOG_WARN("Cannot resolve remote endpoint: {}", ec.message());
+        }
+
         doReadHeader();
     }
 
     void Session::send(const std::string& body, uint32_t message_id)
     {
-        std::unique_lock<std::mutex> lock(send_queue_mutex_);
-        send_queue_.push(std::make_tuple(std::make_unique<std::string>(body), message_id, static_cast<uint32_t>(0)));
-
-        // 如果当前没有正在发送的消息，启动发送流程
-        if (!is_sending_)
-        {
-            is_sending_ = true;
-            lock.unlock();
-            processSendQueue();
-        }
+        send(body, message_id, PayloadFormat::kRaw);
     }
 
     void Session::send(const google::protobuf::Message& message, uint32_t message_id)
@@ -45,16 +45,14 @@ namespace cncpp
         std::string serialized_message = ProtobufUtil::Serialize(message);
         if (!serialized_message.empty())
         {
-            // 设置protobuf标志位（第3位）
-            uint32_t additional_flags = 0x04;  // protobuf格式标志
-            send(serialized_message, message_id, additional_flags);
+            send(serialized_message, message_id, PayloadFormat::kProtobuf);
         }
     }
 
-    void Session::send(const std::string& body, uint32_t message_id, uint32_t additional_flags)
+    void Session::send(const std::string& body, uint32_t message_id, PayloadFormat format)
     {
         std::unique_lock<std::mutex> lock(send_queue_mutex_);
-        send_queue_.push(std::make_tuple(std::make_unique<std::string>(body), message_id, additional_flags));
+        send_queue_.push(std::make_tuple(std::make_unique<std::string>(body), message_id, format));
 
         // 如果当前没有正在发送的消息，启动发送流程
         if (!is_sending_)
@@ -77,11 +75,20 @@ namespace cncpp
 
     void Session::close()
     {
-        // 停止接收队列
-        receive_queue_.stop();
+        // 这里不"停"接收队列：队列里已经解码好的帧应当继续被 tick 线程取走。
+        // 队列只负责搬运，连接关闭之后由谁停止消费是 SessionManager 的事（见 A5）。
+        // 早先这里靠 receive_queue_.stop() 让 pop 在空队列上返回 true，
+        // 而消费端一律写 while (pop(message))，于是队列一停就变成死循环。
 
-        // 关闭socket
+        // 先发 FIN，再关闭句柄。顺序反过来会让对端收到 RST 而不是正常的 EOF，
+        // 对端就可能把已经发出的数据当成丢失。
         boost::system::error_code ec;
+        socket_.shutdown(tcp::socket::shutdown_both, ec);
+        if (ec && ec != boost::asio::error::not_connected && ec != boost::asio::error::bad_descriptor)
+        {
+            LOG_WARN("Shutdown error: {}", ec.message());
+        }
+
         socket_.close(ec);
         if (ec)
         {
@@ -96,18 +103,18 @@ namespace cncpp
 
     tcp::endpoint Session::getRemoteEndpoint() const
     {
-        return socket_.remote_endpoint();
+        return remote_endpoint_;
     }
 
-    // 获取接收消息队列
-    DualLockFreeQueue& Session::getReceiveQueue()
+    // 获取接收队列
+    SpscMessageQueue& Session::getReceiveQueue()
     {
         return receive_queue_;
     }
 
     void Session::processSendQueue()
     {
-        std::tuple<std::unique_ptr<std::string>, uint32_t, uint32_t> message;
+        SendQueueItem message;
 
         {
             std::unique_lock<std::mutex> lock(send_queue_mutex_);
@@ -127,39 +134,53 @@ namespace cncpp
         doSend(std::move(*std::get<0>(message)), std::get<1>(message), std::get<2>(message));
     }
 
-    void Session::doSend(std::string body, uint32_t message_id, uint32_t additional_flags)
+    void Session::doSend(std::string body, uint32_t message_id, PayloadFormat format)
     {
         auto self(shared_from_this());
 
-        uint32_t flags = additional_flags;
+        uint16_t flags = 0;
 
         // 压缩
         if (compression_)
         {
-            body = compression_->Compress(body);
-            flags |= 0x01;  // 设置压缩标志
+            body  = compression_->Compress(body);
+            flags = static_cast<uint16_t>(flags | kFlagCompressed);
         }
 
         // 加密
         if (encryption_)
         {
-            body = encryption_->Encrypt(body);
-            flags |= 0x02;  // 设置加密标志
+            body  = encryption_->Encrypt(body);
+            flags = static_cast<uint16_t>(flags | kFlagEncrypted);
         }
 
-        // 构建消息头
+        if (body.size() > kMaxBodyLength)
+        {
+            LOG_ERROR("Dropping outgoing message_id={}: body {} exceeds limit {}", message_id, body.size(),
+                      kMaxBodyLength);
+            processSendQueue();
+            return;
+        }
+
+        // 构建帧头（format 是载荷语义，flags 只是传输层变换，两者正交）
         MessageHeader header;
+        header.format_      = format;
+        header.flags_       = flags;
         header.body_length_ = static_cast<uint32_t>(body.size());
         header.message_id_  = message_id;
-        header.flags_       = flags;
 
-        // 构建完整消息
-        std::vector<char> buffer(sizeof(MessageHeader) + body.size());
-        std::memcpy(buffer.data(), &header, sizeof(MessageHeader));
-        std::memcpy(buffer.data() + sizeof(MessageHeader), body.data(), body.size());
+        // 完整帧 = kHeaderSize 字节定长帧头 + body。
+        // buffer 必须是堆上共享的：async_write 只是持有这块内存的引用，
+        // 而 doSend 在发起后就返回了，局部变量会在写入完成前析构。
+        auto buffer = std::make_shared<std::vector<char>>(kHeaderSize + body.size());
+        encodeHeader(header, buffer->data());
+        if (!body.empty())
+        {
+            std::memcpy(buffer->data() + kHeaderSize, body.data(), body.size());
+        }
 
-        boost::asio::async_write(socket_, boost::asio::buffer(buffer),
-                                 [this, self](boost::system::error_code ec, std::size_t length) {
+        boost::asio::async_write(socket_, boost::asio::buffer(*buffer),
+                                 [this, self, buffer](boost::system::error_code ec, std::size_t length) {
             if (!ec)
             {
                 total_bytes_written_ += length;
@@ -177,36 +198,44 @@ namespace cncpp
     void Session::doReadHeader()
     {
         auto self(shared_from_this());
-        boost::asio::async_read(socket_, boost::asio::buffer(&current_header_, sizeof(MessageHeader)),
+        boost::asio::async_read(socket_, boost::asio::buffer(header_buffer_),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
-            if (!ec)
+            if (ec)
             {
-                total_bytes_read_ += length;
+                if (ec != boost::asio::error::operation_aborted)
+                {
+                    LOG_ERROR("Read header error: {}", ec.message());
+                }
+                close();
+                return;
+            }
 
-                // 验证魔数
-                if (current_header_.magic_ != 0x12345678)
-                {
-                    LOG_ERROR("Invalid message magic number");
-                    doReadHeader();
-                    return;
-                }
+            total_bytes_read_ += length;
 
-                // 读取消息体
-                if (current_header_.body_length_ > 0)
-                {
-                    body_buffer_.resize(current_header_.body_length_);
-                    doReadBody();
-                }
-                else
-                {
-                    // 空消息体
-                    processMessage("", current_header_);
-                    doReadHeader();
-                }
+            // 拆帧：线上字节 -> 帧头。校验顺序 magic -> version -> format -> body_length。
+            const HeaderError err = decodeHeader(header_buffer_.data(), current_header_);
+            if (err != HeaderError::kOk)
+            {
+                // body_length 本身就在帧头里，头部不合格就无从知道该跳过多少字节，
+                // 帧同步已经丢了，唯一能做的是关连接。绝不重试读下一帧。
+                LOG_ERROR("Bad frame header, closing connection: {}", toString(err));
+                close();
+                return;
+            }
+
+            if (current_header_.body_length_ > 0)
+            {
+                body_buffer_.resize(current_header_.body_length_);
+                doReadBody();
+            }
+            else if (processMessage(std::string(), current_header_))
+            {
+                // 空 body 的帧，解码成功后继续读下一帧
+                doReadHeader();
             }
             else
             {
-                LOG_ERROR("Read header error: {}", ec.message());
+                close();
             }
         });
     }
@@ -216,75 +245,91 @@ namespace cncpp
         auto self(shared_from_this());
         boost::asio::async_read(socket_, boost::asio::buffer(body_buffer_),
                                 [this, self](boost::system::error_code ec, std::size_t length) {
-            if (!ec)
+            if (ec)
             {
-                total_bytes_read_ += length;
+                if (ec != boost::asio::error::operation_aborted)
+                {
+                    LOG_ERROR("Read body error: {}", ec.message());
+                }
+                close();
+                return;
+            }
 
-                // 处理消息体
-                std::string body(body_buffer_.begin(), body_buffer_.end());
-                processMessage(body, current_header_);
+            total_bytes_read_ += length;
 
-                // 继续读取下一个消息
+            // 拆帧完成，把 body 交给解码这一步（ADR-0008）
+            const bool keep_open
+                = processMessage(std::string(body_buffer_.begin(), body_buffer_.end()), current_header_);
+
+            if (keep_open)
+            {
                 doReadHeader();
             }
             else
             {
-                LOG_ERROR("Read body error: {}", ec.message());
+                close();
             }
         });
     }
 
-    void Session::processMessage(std::string body, MessageHeader header)
+    bool Session::processMessage(std::string body, const MessageHeader& header)
     {
-        // 解密
-        if (header.flags_ & 0x02 && encryption_)
+        // 传输层变换：发送侧是「先压缩再加密」，这里必须严格反序还原
+        if ((header.flags_ & kFlagEncrypted) && encryption_)
         {
             body = encryption_->Decrypt(body);
         }
 
-        // 解压
-        if (header.flags_ & 0x01 && compression_)
+        if ((header.flags_ & kFlagCompressed) && compression_)
         {
             body = compression_->Decompress(body);
         }
 
-        // 创建消息
-        NetworkMessage message;
+        // 投递到接收队列。队列满时丢弃，这是背压而不是错误：tick 这一拍没跟上，
+        // 让 io 线程等它只会把慢扩散到所有连接上。每 1024 条才报一次警，
+        // 否则持续过载会先于真正的问题把 io 线程淹死在日志里。
+        auto enqueue = [this](NetworkMessage&& message) {
+            if (receive_queue_.push(std::move(message)))
+            {
+                return;
+            }
 
-        // 检查是否是protobuf格式消息（flags第3位为1）
-        if (header.flags_ & 0x04)
+            if (++queue_full_drops_ % 1024 == 1)
+            {
+                LOG_WARN("Receive queue full, dropped {} messages on this session", queue_full_drops_);
+            }
+        };
+
+        if (header.format_ == PayloadFormat::kRaw)
         {
-            // 尝试通过注册的处理器创建消息
+            enqueue(NetworkMessage::createTextMessage(header, std::move(body), remote_endpoint_));
+            return true;
+        }
+        else if (header.format_ == PayloadFormat::kProtobuf)
+        {
             auto proto_message = MessageHandlerRegistry::instance().createMessage(header.message_id_);
-
-            if (proto_message)
+            if (!proto_message)
             {
-                // 反序列化消息
-                if (!ProtobufUtil::Deserialize(body, *proto_message))
-                {
-                    LOG_ERROR("Failed to deserialize protobuf message, message_id={}", header.message_id_);
-                    message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
-                }
-                else
-                {
-                    LOG_DEBUG("Successfully deserialized protobuf message, message_id={}", header.message_id_);
-                    message = NetworkMessage::createProtobufMessage(header, std::move(proto_message),
-                                                                    socket_.remote_endpoint());
-                }
+                // 服务端不认得这个 id：丢弃这一帧，连接保持。这是服务端缺注册，
+                // 不是客户端发了坏包，因此不计入错误预算（ADR-0007）。
+                LOG_WARN("No handler registered for message_id={}, dropping frame", header.message_id_);
+                return true;
             }
-            else
-            {
-                LOG_WARN("No handler registered for message_id={}, keeping raw body", header.message_id_);
-                message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
-            }
-        }
-        else
-        {
-            message = NetworkMessage::createTextMessage(header, body, socket_.remote_endpoint());
-        }
 
-        // 推送到Session自己的接收队列
-        receive_queue_.push(message);
+            if (!ProtobufUtil::Deserialize(body, *proto_message))
+            {
+                // 认得 id 却解不开：丢弃这一帧、连接保持，连续超阈值才关（ADR-0009）。
+                // 帧是长度前缀的，丢弃不会让流失同步，所以这里是策略选择而非正确性要求。
+                ++consecutive_decode_failures_;
+                LOG_ERROR("Failed to decode message_id={} ({} consecutive), dropping frame", header.message_id_,
+                          consecutive_decode_failures_);
+                return consecutive_decode_failures_ < kMaxConsecutiveDecodeFailures;
+            }
+
+            consecutive_decode_failures_ = 0;
+            enqueue(NetworkMessage::createProtobufMessage(header, std::move(proto_message), remote_endpoint_));
+            return true;
+        }
     }
 
     // Acceptor 类实现

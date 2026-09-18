@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "compression.h"
-#include "dual_lock_free_queue.h"
 #include "encryption.h"
 #include "logger.h"
 #include "message.h"

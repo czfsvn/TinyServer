@@ -53,16 +53,15 @@ void ClientService::onStop()
 
 bool ClientService::onTick()
 {
-    static uint32_t tick_count = 0;
+    // 每拍都要抽干。原来这里每 100 拍才调用一次（50ms 一格就是 5 秒），
+    // 期间客户端的接收队列被写满，Session 就开始丢帧了（A6）。
+    sClientManager.processAllMessages();
 
+    static uint32_t tick_count = 0;
     if (++tick_count % 100 == 0)
     {
-        sClientManager.processAllMessages();
-
-        size_t connected = sClientManager.getConnectedCount();
-        size_t total     = sClientManager.getClientCount();
-
-        LOG_DEBUG("ClientService tick - connected: {}/{}", connected, total);
+        LOG_DEBUG("ClientService tick - connected: {}/{}", sClientManager.getConnectedCount(),
+                  sClientManager.getClientCount());
     }
 
     return true;

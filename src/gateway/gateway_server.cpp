@@ -4,6 +4,7 @@
 #include "gate_user_manager.h"
 #include "io_context_pool.h"
 #include "logger.h"
+#include "stacktrace.h"
 #include "xmlloader.h"
 
 GatewayServer::GatewayServer()
@@ -52,6 +53,8 @@ bool GatewayServer::onStart()
         return false;
     }
 
+    LOG_ERROR("[GatewayServer] stack: {}", cncpp::captureStackTrace(1, 5));
+
     const uint32_t max_retry_count = 5;
     uint32_t       retry_count     = 0;
     bool           is_ready        = false;
@@ -66,6 +69,8 @@ bool GatewayServer::onStart()
         cncpp::sleepfor_seconds(2);
         retry_count++;
     }
+
+    LOG_STACK(DEBUG);
 
     if (!is_ready)
     {
@@ -340,6 +345,10 @@ bool GatewayServer::onTick()
 {
     static uint32_t tick_count = 0;
 
+    // 本拍到达的消息全部在这一拍交给业务。业务与定时器回调共享"无需加锁"
+    // 这个前提，前提成立靠的就是它们在同一拍内串行发生（ADR-0004）。
+    drainInboundMessages();
+
     if (++tick_count % 100 == 0)
     {
         sGateTaskManager.cleanupTimeoutTasks();
@@ -354,6 +363,39 @@ bool GatewayServer::onTick()
     }
 
     return true;
+}
+
+void GatewayServer::drainInboundMessages()
+{
+    // getAllTasks() 只在拷贝任务表那一小段持锁。分发时绝不能握着这把锁：
+    // io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发会把它挡在门外。
+    const std::vector<GateTaskPtr> tasks = sGateTaskManager.getAllTasks();
+
+    size_t message_count = 0;
+    for (const auto& task : tasks)
+    {
+        // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
+        const std::shared_ptr<cncpp::Session> session = task->getSession();
+        if (!session)
+        {
+            continue;
+        }
+
+        // 抽干。会话已关闭也要照做：close() 之后队列里已解码的帧仍然要交给业务（A6）。
+        cncpp::NetworkMessage message;
+        while (session->getReceiveQueue().pop(message))
+        {
+            // 交给任务自己分发：PENDING/INITIALIZING 走认证、EXECUTING 走业务，
+            // 这个状态机只有 GateTask 知道，同一个连接上两类帧的先后顺序也由它保证。
+            task->processMessage(message);
+            ++message_count;
+        }
+    }
+
+    if (message_count > 0)
+    {
+        LOG_DEBUG("GatewayServer tick dispatched {} messages from {} tasks", message_count, tasks.size());
+    }
 }
 
 void GatewayServer::loadGameConfigs()

@@ -100,11 +100,16 @@ namespace cncpp
         // 处理每个会话的消息队列
         for (const auto& si : sessions_copy)
         {
-            MessageType message;
-            // 尝试从会话的接收队列中获取消息
-            if (si.session && si.session->getReceiveQueue().pop(message))
+            if (!si.session)
             {
-                // 调用消息处理函数
+                continue;
+            }
+
+            // 抽干，而不是每拍一条：每拍一条会把单连接吞吐锁死在
+            // 1000 / main_loop_interval_ms 条/秒（ADR-0004）。
+            MessageType message;
+            while (si.session->getReceiveQueue().pop(message))
+            {
                 message_handler(message, si.info);
             }
         }

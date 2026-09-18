@@ -66,6 +66,9 @@ private:
 
     void onClientConnected(tcp::socket&& sock);
 
+    // 每拍把所有任务会话的接收队列抽干
+    void drainInboundMessages();
+
     void stopAcceptor();
     bool initAcceptor();
     bool startAcceptor();

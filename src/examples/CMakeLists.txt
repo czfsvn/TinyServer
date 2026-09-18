@@ -15,3 +15,12 @@
 
 add_executable(readxml readxml.cpp)
 target_link_libraries(readxml PRIVATE base)
+
+# 时间轮行为验证程序: 跑 runAfter / runEvery / cancel / 回调内注册, 超出一格误差即失败
+add_executable(timer_verify timer_verify.cpp)
+target_link_libraries(timer_verify PRIVATE base)
+
+# SPSC 队列行为验证程序: [5] 双线程那条只有在 TSAN 下才有意义.
+# 零依赖版本(同样的用例另有一份 gtest 版, 见 src/tests/), 装不了 GoogleTest 也能跑
+add_executable(spsc_queue_verify spsc_queue_verify.cpp)
+target_link_libraries(spsc_queue_verify PRIVATE base)

@@ -2,6 +2,8 @@
 #define MESSAGE_H
 
 #include <boost/asio.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -11,18 +13,151 @@ using boost::asio::ip::tcp;
 
 namespace cncpp
 {
+    // ======== 帧头（术语见 CONTEXT.md 的「帧」）========
+    //
+    // 线上布局，定长 16 字节，全部网络字节序（大端）：
+    //   magic(4) | version(1) | format(1) | flags(2) | body_length(4) | message_id(4)
+    //
+    // 内存里的 MessageHeader **不是**这个布局：它是主机字节序的普通结构体，
+    // 只能通过 encodeHeader / decodeHeader 与字节流互转。
+    // 不要对它 memcpy —— 那会把字节序和对齐假设重新引进来。
+
+    constexpr uint32_t kMessageMagic   = 0x12345678;
+    constexpr uint8_t  kMessageVersion = 1;
+    constexpr size_t   kHeaderSize     = 16;
+
+    // 单帧 body 的上限。必须在按 body_length_ 分配内存之前校验，
+    // 否则一个伪造的头部就能让服务端分配 4GB。
+    constexpr uint32_t kMaxBodyLength = 1024 * 1024;
+
+    // 载荷格式：body 里装的是什么。互斥取值，不是位标志（ADR-0006）。
+    enum class PayloadFormat : uint8_t
+    {
+        kRaw      = 0,  // 不透明字节，不做解码
+        kProtobuf = 1,  // 某个已注册 protobuf 类型的序列化结果
+    };
+
+    // 传输层变换标志，与 format 正交：加密与压缩作用在字节层面，
+    // 不改变 body 是什么。
+    enum : uint16_t
+    {
+        kFlagCompressed = 0x01,
+        kFlagEncrypted  = 0x02,
+    };
+
     struct MessageHeader
     {
-        uint32_t magic_;
-        uint32_t version_;
-        uint32_t body_length_;
-        uint32_t message_id_;
-        uint32_t flags_;
-
-        MessageHeader() : magic_(0x12345678), version_(1), body_length_(0), message_id_(0), flags_(0)
-        {
-        }
+        uint32_t      magic_       = kMessageMagic;
+        uint8_t       version_     = kMessageVersion;
+        PayloadFormat format_      = PayloadFormat::kRaw;
+        uint16_t      flags_       = 0;
+        uint32_t      body_length_ = 0;
+        uint32_t      message_id_  = 0;
     };
+
+    // 帧头解码与校验的结果。
+    enum class HeaderError
+    {
+        kOk,
+        kBadMagic,  // 唯一真正失去帧同步、无法恢复的情况
+        kBadVersion,
+        kBadFormat,
+        kBodyTooLarge,
+    };
+
+    inline const char* toString(HeaderError err)
+    {
+        switch (err)
+        {
+            case HeaderError::kOk: return "ok";
+            case HeaderError::kBadMagic: return "bad magic, frame sync lost";
+            case HeaderError::kBadVersion: return "unsupported version";
+            case HeaderError::kBadFormat: return "unknown payload format";
+            case HeaderError::kBodyTooLarge: return "body length exceeds limit";
+        }
+        return "unknown";
+    }
+
+    namespace detail
+    {
+        inline uint32_t loadBe32(const unsigned char* p)
+        {
+            return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16)
+                 | (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+        }
+
+        inline void storeBe32(unsigned char* p, uint32_t v)
+        {
+            p[0] = static_cast<unsigned char>(v >> 24);
+            p[1] = static_cast<unsigned char>(v >> 16);
+            p[2] = static_cast<unsigned char>(v >> 8);
+            p[3] = static_cast<unsigned char>(v);
+        }
+
+        inline uint16_t loadBe16(const unsigned char* p)
+        {
+            return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | static_cast<uint16_t>(p[1]));
+        }
+
+        inline void storeBe16(unsigned char* p, uint16_t v)
+        {
+            p[0] = static_cast<unsigned char>(v >> 8);
+            p[1] = static_cast<unsigned char>(v);
+        }
+    }  // namespace detail
+
+    // 把帧头写进至少 kHeaderSize 字节的缓冲区。
+    inline void encodeHeader(const MessageHeader& header, void* out)
+    {
+        auto* p = static_cast<unsigned char*>(out);
+        detail::storeBe32(p, header.magic_);
+        p[4] = header.version_;
+        p[5] = static_cast<unsigned char>(header.format_);
+        detail::storeBe16(p + 6, header.flags_);
+        detail::storeBe32(p + 8, header.body_length_);
+        detail::storeBe32(p + 12, header.message_id_);
+    }
+
+    // 从 kHeaderSize 字节的缓冲区读出帧头并校验。
+    // 返回非 kOk 表示这一帧不能用，调用方必须关闭连接：body_length 本身就在帧头里，
+    // 头部不合格就无从知道该跳过多少字节，帧同步已经丢了（ADR-0009）。
+    inline HeaderError decodeHeader(const void* in, MessageHeader& out)
+    {
+        const auto* p = static_cast<const unsigned char*>(in);
+
+        const uint32_t magic = detail::loadBe32(p);
+        if (magic != kMessageMagic)
+        {
+            return HeaderError::kBadMagic;
+        }
+
+        const uint8_t version = p[4];
+        if (version != kMessageVersion)
+        {
+            return HeaderError::kBadVersion;
+        }
+
+        const uint8_t format = p[5];
+        if (format != static_cast<uint8_t>(PayloadFormat::kRaw)
+            && format != static_cast<uint8_t>(PayloadFormat::kProtobuf))
+        {
+            return HeaderError::kBadFormat;
+        }
+
+        const uint32_t body_length = detail::loadBe32(p + 8);
+        if (body_length > kMaxBodyLength)
+        {
+            return HeaderError::kBodyTooLarge;
+        }
+
+        out.magic_       = magic;
+        out.version_     = version;
+        out.format_      = static_cast<PayloadFormat>(format);
+        out.flags_       = detail::loadBe16(p + 6);
+        out.body_length_ = body_length;
+        out.message_id_  = detail::loadBe32(p + 12);
+        return HeaderError::kOk;
+    }
 
     struct NetworkMessage
     {

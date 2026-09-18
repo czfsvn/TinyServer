@@ -105,7 +105,8 @@ namespace cncpp
         {
             if (current_tick_ms_ - last_call_back_ >= interval_ms_)
             {
-                LOG_INFO("[IOContextPool][updateTimer] call_time={}", current_tick_ms_);
+                // 每拍一行 INFO 会把真正的业务日志淹掉；tick 打点只在排查抖动时用。
+                LOG_TRACE("[IOContextPool][updateTimer] call_time={}", current_tick_ms_);
                 timer_callback_();
                 last_call_back_ = current_tick_ms_;
             }

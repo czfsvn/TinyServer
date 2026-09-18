@@ -25,6 +25,10 @@ public:
 
 private:
     void onConnectionCreated(tcp::socket&& sock);
+
+    // 每拍把所有任务会话的接收队列抽干
+    void drainInboundMessages();
+
     bool initAcceptor();
     bool startAcceptor();
     void stopAcceptor();

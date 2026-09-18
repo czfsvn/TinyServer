@@ -3,12 +3,8 @@
 #include "Misc.h"
 #include "io_context_pool.h"
 #include "logger.h"
-#include "session_manager.h"
 #include "timer_wheel.h"
 #include "tiny_task_manager.h"
-
-// 全局会话管理器（保留兼容旧代码）
-cncpp::SessionManager<cncpp::Session> g_session_manager;
 
 TinyServer::TinyServer()
 {
@@ -93,13 +89,10 @@ bool TinyServer::startAcceptor()
 
 void TinyServer::closeAllSessions()
 {
-    // 使用单例任务管理器停止所有任务
+    // stopAllTasks() 会 stop 每个任务，TcpTask::stop() 负责关闭它持有的会话，
+    // 所以这里不必另外再走一遍会话列表。
     sTinyTaskManager.stopAllTasks();
-    LOG_INFO("All tasks stopped");
-
-    // 停止所有会话（保留兼容旧代码）
-    g_session_manager.CloseAllSessions();
-    LOG_INFO("All sessions closed");
+    LOG_INFO("All tasks stopped, all sessions closed");
 }
 
 void TinyServer::finalAll()
@@ -124,7 +117,9 @@ void TinyServer::onConnectionCreated(tcp::socket&& sock)
 
 void TinyServer::onMessageReceived(const cncpp::NetworkMessage& message, const std::string& session_info)
 {
-    LOG_INFO("Received message from {}", session_info);
+    // 每条入站消息打一行 INFO 会在正常负载下把日志淹掉。这里只是占位：
+    // 真正的业务分发要等 TinyServer 这边有 handler 才有意义。
+    LOG_DEBUG("Received message id={} from {}", message.header_.message_id_, session_info);
 }
 
 bool TinyServer::initGame()
@@ -138,21 +133,42 @@ bool TinyServer::onTick()
 {
     gameUpdate();
 
-    // message process tick
-    {
-        g_session_manager.ProcessAllSessionQueues<cncpp::NetworkMessage>(
-            [](const cncpp::NetworkMessage& message, const std::string& session_info) {
-            // 处理消息
-            LOG_INFO("Received message from {}", session_info);
-        });
-        // std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    // 使用单例任务管理器遍历任务（示例）
-    size_t active_count = sTinyTaskManager.getActiveTaskCount();
-    // LOG_DEBUG("Active tasks: {}", active_count);
+    // 本拍到达的消息全部在这一拍交给业务。业务与定时器回调共享"无需加锁"
+    // 这个前提，前提成立靠的就是它们在同一拍内串行发生（ADR-0004）。
+    drainInboundMessages();
 
     return true;
+}
+
+void TinyServer::drainInboundMessages()
+{
+    // getAllTasks() 只在拷贝任务表那一小段持锁。分发时绝不能握着这把锁：
+    // io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发会把它挡在门外。
+    const std::vector<TinyTaskPtr> tasks = sTinyTaskManager.getAllTasks();
+
+    size_t message_count = 0;
+    for (const auto& task : tasks)
+    {
+        // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
+        const std::shared_ptr<cncpp::Session> session = task->getSession();
+        if (!session)
+        {
+            continue;
+        }
+
+        // 抽干。会话已关闭也要照做：close() 之后队列里已解码的帧仍然要交给业务（A6）。
+        cncpp::NetworkMessage message;
+        while (session->getReceiveQueue().pop(message))
+        {
+            onMessageReceived(message, task->getClientIP());
+            ++message_count;
+        }
+    }
+
+    if (message_count > 0)
+    {
+        LOG_DEBUG("TinyServer tick dispatched {} messages from {} tasks", message_count, tasks.size());
+    }
 }
 
 void TinyServer::gameUpdate()

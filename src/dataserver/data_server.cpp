@@ -1,15 +1,15 @@
 #include "data_server.h"
-#include "all_table_metas.h"
 #include "config_manager.h"
 #include "data_processor.h"
 #include "data_task_manager.h"
 #include "io_context_pool.h"
 #include "logger.h"
 #include "mysql_conn.h"
-#include "table_meta.h"
 
 #include <string>
 #include <vector>
+#include "all_table_metas.h"
+
 
 DataServer::DataServer()
 {
@@ -120,12 +120,47 @@ void DataServer::closeAllSessions()
 
 bool DataServer::onTick()
 {
+    // 本拍到达的消息全部在这一拍交给业务。业务与定时器回调共享"无需加锁"
+    // 这个前提，前提成立靠的就是它们在同一拍内串行发生（ADR-0004）。
+    drainInboundMessages();
+
     static uint32_t tick_count = 0;
     if (++tick_count % 100 == 0)
     {
         LOG_DEBUG("DataServer tick, active connections: {}", sDataTaskManager.getActiveTaskCount());
     }
     return true;
+}
+
+void DataServer::drainInboundMessages()
+{
+    // getAllTasks() 只在拷贝任务表那一小段持锁。分发时绝不能握着这把锁：
+    // io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发会把它挡在门外。
+    const std::vector<DataTaskPtr> tasks = sDataTaskManager.getAllTasks();
+
+    size_t message_count = 0;
+    for (const auto& task : tasks)
+    {
+        // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
+        const std::shared_ptr<cncpp::Session> session = task->getSession();
+        if (!session)
+        {
+            continue;
+        }
+
+        // 抽干。会话已关闭也要照做：close() 之后队列里已解码的帧仍然要交给业务（A6）。
+        cncpp::NetworkMessage message;
+        while (session->getReceiveQueue().pop(message))
+        {
+            task->processMessage(message);
+            ++message_count;
+        }
+    }
+
+    if (message_count > 0)
+    {
+        LOG_DEBUG("DataServer tick dispatched {} messages from {} tasks", message_count, tasks.size());
+    }
 }
 
 void DataServer::onConnectionCreated(tcp::socket&& sock)
@@ -204,7 +239,6 @@ bool DataServer::syncTableSchema()
     {
         ScopedMySqlConn con;
 
-        bool ok = true;
         for (const cncpp::db::TableMeta* meta : metas)
         {
             if (!tableExists(*con, meta->name))
@@ -214,7 +248,6 @@ bool DataServer::syncTableSchema()
                 if (!execDdl(*con, sql))
                 {
                     LOG_ERROR("[SchemaSync] failed to create table {}", meta->name);
-                    ok = false;
                 }
                 // 刚建出来的表列是全的，不必再逐列补
                 continue;
@@ -231,12 +264,9 @@ bool DataServer::syncTableSchema()
                 if (!execDdl(*con, sql))
                 {
                     LOG_ERROR("[SchemaSync] failed to add column {}.{}", meta->name, column.name);
-                    ok = false;
                 }
             }
         }
-
-        return ok;
     }
     catch (const std::exception& e)
     {

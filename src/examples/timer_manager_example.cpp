@@ -19,7 +19,9 @@ void testSingleTimer()
     });
 
     // 测试 runAt - 绝对时间执行
-    uint64_t futureTime = cncpp::getProcessTickMs() + 200;
+    // 基准必须是 getNowMilliSecond(), 与 TimerWheel::addTimer 内部一致;
+    // getProcessTickMs() 是进程启动时刻的快照, 用它会让定时器一进来就"已过期"
+    uint64_t futureTime = cncpp::getNowMilliSecond() + 200;
     sTimerManager.runAt(futureTime, []() {
         LOG_INFO("单次定时器执行: 200ms 后（绝对时间）");
     });
@@ -54,9 +56,16 @@ void testTimerCancel()
 {
     LOG_INFO("=== 测试定时器取消 ===");
 
-    // 这里可以扩展测试定时器的取消功能
-    // 注意：当前 TimerManager 还没有提供取消定时器的接口
-    LOG_INFO("定时器取消测试：待实现");
+    // 永久定时器, 1s 后取消, 之后不应再触发
+    uint64_t id = sTimerManager.runForever(200, []() {
+        LOG_INFO("这个定时器应该在 1s 后被取消");
+    });
+    LOG_INFO("注册永久定时器 id={}", id);
+
+    sTimerManager.runAfter(1000, [id]() {
+        LOG_INFO("取消定时器 id={}", id);
+        sTimerManager.cancel(id);
+    });
 }
 
 int main(int argc, char* argv[])
@@ -77,22 +86,23 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // 初始化定时器管理器
-    sTimerManager.init();
+    // 初始化定时器管理器, 一格 = 主循环周期, 见 ADR-0001
+    sTimerManager.init(sMainConfig.main_loop_interval_ms());
 
     // 运行测试
     testSingleTimer();
+    testTimerCancel();
     // testRepeatedTimer();
     // testForeverTimer();
-    // testTimerCancel();
 
     sIOContextPool.setTimerCallback([]() {
         sTimerManager.tick();
     }, sMainConfig.main_loop_interval_ms());
 
     sIOContextPool.run();
-    // 停止定时器线程（当前版本没有 stop 方法，这里直接退出）
     LOG_INFO("测试完成，退出程序");
+
+    sTimerManager.stop();
 
     // 停止 IO 上下文池
     sIOContextPool.stop();

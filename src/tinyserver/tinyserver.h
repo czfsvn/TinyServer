@@ -54,6 +54,9 @@ private:
     // 处理消息
     void onMessageReceived(const cncpp::NetworkMessage& message, const std::string& session_info);
 
+    // 每拍把所有任务会话的接收队列抽干
+    void drainInboundMessages();
+
     void tick();
 
     void stopAcceptor();

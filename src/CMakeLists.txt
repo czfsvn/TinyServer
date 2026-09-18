@@ -39,3 +39,10 @@ add_subdirectory(dataserver)
 add_subdirectory(tinyclient)
 add_subdirectory(gateway)
 #add_subdirectory(tools)
+
+# 单元测试依赖 GoogleTest, 默认不参与构建: cmake -S src -B build -DENABLE_TESTS=ON
+option(ENABLE_TESTS "Build unit tests (requires GoogleTest)" OFF)
+if(ENABLE_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
