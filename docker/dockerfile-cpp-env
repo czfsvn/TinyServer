@@ -25,7 +25,8 @@ ENV MYSQLPP_VERSION=3.3.0 \
     PROTOBUF_FULL_VERSION=3.21.12 \
     FMT_VERSION=10.2.1 \
     SPDLOG_VERSION=1.12.0 \
-    HIREDIS_VERSION=1.2.0
+    HIREDIS_VERSION=1.2.0 \
+    GTEST_VERSION=1.15.2
 
 # 编译/链接/运行时路径
 ENV CMAKE_PREFIX_PATH=${THIRD_PARTY_INSTALL_PREFIX} \
@@ -769,6 +770,23 @@ RUN wget -O /tmp/mysql++-${MYSQLPP_VERSION}.tar.gz \
     && rm -rf /tmp/mysql++-${MYSQLPP_VERSION}* \
     && ldconfig
 
+# ---- 7. GoogleTest 1.15.2（单元测试框架, 项目的 -DENABLE_TESTS=ON 依赖它） ----
+# 用源码编译而不是 apt 的 libgtest-dev: 跟其它依赖一起落在 CMAKE_PREFIX_PATH 下,
+# find_package(GTest) 能直接找到; 版本也和其它库一样在 ENV 里统一管理。
+# 注意: googletest 1.14 起自身要求 CMake >= 3.13, Ubuntu 22.04 的 cmake 3.22 满足。
+# Release 装的静态库配 Debug/TSAN 的测试二进制没问题: TSAN 是通过动态拦截 pthread
+# 来建模同步的, 不要求被测库自身也被插桩。
+RUN git clone --branch v${GTEST_VERSION} --depth 1 https://github.com/google/googletest.git /tmp/googletest \
+    && mkdir -p /tmp/googletest/build && cd /tmp/googletest/build \
+    && cmake .. \
+        -DCMAKE_INSTALL_PREFIX=${THIRD_PARTY_INSTALL_PREFIX} \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_GMOCK=ON \
+        -DINSTALL_GTEST=ON \
+    && make -j$(nproc) install \
+    && rm -rf /tmp/googletest \
+    && ldconfig
+
 # ============================================================================
 # 验证安装
 # ============================================================================
@@ -778,7 +796,8 @@ RUN echo "===== 第三方库安装验证 =====" \
     && echo "fmt:      $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*fmt*' 2>/dev/null | wc -l) 个文件" \
     && echo "spdlog:   $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*spdlog*' 2>/dev/null | wc -l) 个文件" \
     && echo "hiredis:  $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*hiredis*' 2>/dev/null | wc -l) 个文件" \
-    && echo "MySQL++:  $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*mysqlpp*' 2>/dev/null | wc -l) 个文件"
+    && echo "MySQL++:  $(find ${THIRD_PARTY_INSTALL_PREFIX}/lib -name '*mysqlpp*' 2>/dev/null | wc -l) 个文件" \
+    && echo "GTest:    $(test -f ${THIRD_PARTY_INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake && echo 'CMake 配置就绪' || echo '未找到')"
 
 # ============================================================================
 # 启动脚本 & 收尾
@@ -796,6 +815,7 @@ echo "  - fmt 10.2.1 (Release)"
 echo "  - spdlog 1.12.0 (Release)"
 echo "  - hiredis 1.2.0 (Release)"
 echo "  - MySQL++ 3.3.0 (Release)"
+echo "  - GoogleTest 1.15.2 (Release, 单元测试)"
 echo ""
 echo "调试工具:"
 echo "  - gdb (增强配置)"

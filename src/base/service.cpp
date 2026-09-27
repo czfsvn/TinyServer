@@ -17,19 +17,54 @@ namespace cncpp
         std::cout << "Service destructor" << std::endl;
         if (is_running_.load())
         {
+            // 仍在运行：走完整停止流程（业务钩子 onStop + 资源清理）
             stop();
         }
         else
         {
-            // 安全网：如果 stop() 未被调用，在此清理
-            // 顺序：signal_handler 先于 IOContextPool，因为 signal_set 持有 main_io_context 的引用
-            // cleanup() 内部有幂等保护，重复调用安全
-            signal_handler_.cleanup();
-            sIOContextPool.cleanup();
+            // 安全网：stop() 没走过、或只走了一半时，在此兜底清理资源
+            // cleanupResources() 每个步骤都幂等，重复调用安全
+            cleanupResources();
         }
     }
 
     bool Service::run(int argc, char* argv[])
+    {
+        // 记录主循环线程：stop() 的完整流程会 join IOContextPool 的 worker 线程，
+        // 必须在同一线程执行（见 stop()）。
+        // 必须在 IOContextPool::init() 创建 worker 线程之前写：
+        // std::thread 的构造建立 happens-before，worker 线程才能安全地读到这个值。
+        main_thread_id_ = std::this_thread::get_id();
+
+        // 崩溃处理要尽早装上：ReadFromCommandLine / Logger::init / IOContextPool::init /
+        // loadGameConfigs 这一段恰恰最容易崩，装在 start() 里就太晚了。
+        // 此刻尚无任何资源需要清理，故放在 try 之外（init 自身失败也无资源可回溯）。
+        CrashHandler::init();
+
+        // 异常边界：派生类钩子（loadGameConfigs/onInit/onStart）抛出的异常必须在这里收住。
+        // 否则会穿出 main() 直接 terminate，清理路径一行都执行不到（日志也来不及 flush）。
+        try
+        {
+            return runImpl(argc, argv);
+        }
+        catch (const std::exception& e)
+        {
+            // 先 cerr 再 LOG：异常可能发生在 sLogger.init() 之前，此时 LOG_* 是空操作
+            std::cerr << "[Service] run() exception: " << e.what() << std::endl;
+            LOG_ERROR("[Service] run() exception: {}", e.what());
+            cleanupResources();
+            return false;
+        }
+        catch (...)
+        {
+            std::cerr << "[Service] run() unknown exception" << std::endl;
+            LOG_ERROR("[Service] run() unknown exception");
+            cleanupResources();
+            return false;
+        }
+    }
+
+    bool Service::runImpl(int argc, char* argv[])
     {
         std::cout << "Initializing Service..." << std::endl;
 
@@ -51,9 +86,14 @@ namespace cncpp
         if (!sIOContextPool.init())
         {
             LOG_ERROR("Failed to init IOContextPool");
-            sLogger.shutdown();
+            cleanupResources();
             return false;
         }
+
+        // 初始化时间轮：一格 = 主循环周期, 见 ADR-0001
+        // 必须在 loadGameConfigs()/onInit()/onStart() 之前：
+        // TimerManager::init() 是"整体重置"语义，放在其后调用会清空派生类已注册的定时器
+        sTimerManager.init(getMainLoopIntervalMs());
 
         // 加载游戏配置
         loadGameConfigs();
@@ -62,9 +102,7 @@ namespace cncpp
         if (!onInit() || !start())
         {
             LOG_ERROR("Derived class init failed");
-            signal_handler_.cleanup();
-            sIOContextPool.cleanup();
-            sLogger.shutdown();
+            cleanupResources();
             return false;
         }
 
@@ -75,6 +113,46 @@ namespace cncpp
         waitForStop();
 
         return true;
+    }
+
+    void Service::cleanupResources() noexcept
+    {
+        // 唯一的资源清理出口：正常停止（stop）、启动失败、异常兜底、析构兜底都走这里。
+        // 顺序敏感：
+        // - signal_handler 持有 main_io_context 的引用，必须先于 IOContextPool 销毁
+        // - sLogger.shutdown() 放最后，保证前面几步还能写日志
+        // 每一步都单独吞异常：本函数会在 catch 块和析构函数中被调用，绝不能再抛
+        try
+        {
+            sTimerManager.stop();
+        }
+        catch (...)
+        {
+        }
+
+        try
+        {
+            signal_handler_.cleanup();
+        }
+        catch (...)
+        {
+        }
+
+        try
+        {
+            sIOContextPool.cleanup();
+        }
+        catch (...)
+        {
+        }
+
+        try
+        {
+            sLogger.shutdown();
+        }
+        catch (...)
+        {
+        }
     }
 
     bool Service::start()
@@ -90,8 +168,7 @@ namespace cncpp
             LOG_ERROR("Failed to init signal handler");
             return false;
         }
-        // 初始化崩溃处理（崩溃信号用平台原生同步机制，不走 io_context）
-        CrashHandler::init();
+        // 崩溃处理已在 run() 开头安装（CrashHandler::init），此处不再重复
 
         // 信号回调：调用 sIOContextPool.stop() 停止所有 io_context
         // main_io_context_->run() 会在此回调返回后退出，
@@ -108,11 +185,12 @@ namespace cncpp
             LOG_INFO("Cleaning up after failed start...");
             is_running_.store(false);
             onStop();
+            // onStart() 现在可以合法注册定时器（TimerManager 已提前 init），失败时要一并停掉
+            sTimerManager.stop();
             return false;
         }
 
-        // 时间轮的一格 = 主循环周期, 见 ADR-0001
-        sTimerManager.init(getMainLoopIntervalMs());
+        // 时间轮已在 run() 中 init（必须先于 onInit/onStart）
         sIOContextPool.setTimerCallback(std::bind(&Service::tick, this), getMainLoopIntervalMs());
 
         is_running_.store(true);
@@ -125,54 +203,66 @@ namespace cncpp
     {
         LOG_INFO("Stopping Service...");
 
+        // 非主线程（例如 worker 线程的 handler 里）不能走完整流程：
+        // cleanupResources() 会 join worker 线程，在这里 join 自己会抛 std::system_error，
+        // 清理会烂在半路。只请求停止，让主循环返回，onStop() + 清理交给主线程。
+        if (main_thread_id_ != std::thread::id{} && main_thread_id_ != std::this_thread::get_id())
+        {
+            LOG_WARN("[Service] stop() from non-main thread: requesting stop only, "
+                     "onStop() and cleanup will run on the main thread");
+            sIOContextPool.stop();
+            return;
+        }
+
         if (!is_running_.exchange(false))
         {
             LOG_WARN("Service is not running");
             return;
         }
 
-        // 1. 派生类停止（可以写日志）
+        // 1. 派生类停止（此时日志仍可用）
         onStop();
-
-        // 2. 停止定时器
-        sTimerManager.stop();
 
         LOG_INFO("Service stopped successfully");
 
-        // 3. 清理信号处理器（必须在 IOContextPool 之前！）
-        //    signal_set 持有 main_io_context 的引用，如果 main_io_context 先被销毁，
-        //    signal_set_->cancel() / reset() 会访问已释放内存 → UB
-        signal_handler_.cleanup();
-
-        // 4. 清理 IOContextPool（stop io_context → join 线程 → requestShutdown logger → clear）
-        sIOContextPool.cleanup();
+        // 2. 收尾清理（定时器 → 信号处理器 → IOContextPool → logger），
+        //    顺序约束与幂等保护都收敛在 cleanupResources() 内
+        cleanupResources();
     }
 
     void Service::waitForStop()
     {
         LOG_DEBUG("[Service] waitForStop start");
 
-        // 执行全部清理（onStop → timer → signal_handler → IOContextPool）
+        // 执行全部清理（onStop → timer → signal_handler → IOContextPool → logger）
+        // sLogger.shutdown() 已收进 stop()，任何调用 stop() 的路径都能关掉日志，
+        // 不再依赖"必须走 waitForStop()"
         stop();
-        // 在 main() 返回前彻底关闭 logger（必须在全局析构前完成）
-        sLogger.shutdown();
 
         std::cout << "[Service] waitForStop end" << std::endl;
     }
 
+    uint64_t Service::getNowMs() const
+    {
+        // 墙钟毫秒，与 cncpp::getNowMilliSecond() 同一基准（不再是 steady_clock 的开机毫秒）。
+        // 直接取 IOContextPool 每拍刷新好的 tick 时间戳：
+        // 时间戳只在一处产生，业务与定时器看到的相位完全一致
+        return sIOContextPool.getCurrentTickMs();
+    }
+
     uint64_t Service::getMainLoopIntervalMs() const
     {
-        return sMainConfig.main_loop_interval_ms();
+        // 取 IOContextPool 实际生效的间隔，而不是配置原值：
+        // 配置为 0 时 IOContextPool 会回退到默认值，这里若仍返回 0，
+        // 时间轮一格就不再等于主循环周期，违反 ADR-0001 的前提。
+        return sIOContextPool.getIntervalMs();
     }
 
     void Service::tick()
     {
-        steady_clock::time_point now   = steady_clock::now();
-        uint64_t                 delta = cncpp::getMsDiff(curr_tick_time_, now);
-        if (delta < getMainLoopIntervalMs())
-            return;
-
-        curr_tick_time_ = now;
+        // 节流统一收口在 IOContextPool（setTimerCallback 传入的 interval_ms），此处不再二次判断。
+        // 原来这里还有一层 delta < interval：两层节流的时间源（steady_clock 纳秒 vs 墙钟毫秒）
+        // 与相位（curr_tick_time_ vs last_call_back_）各自维护，一旦不一致就静默丢拍且无日志。
         sTimerManager.tick();
         onTick();
     }

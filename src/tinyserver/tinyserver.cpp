@@ -1,4 +1,5 @@
 #include "tinyserver.h"
+#include "config.h"
 #include "Global.h"
 #include "Misc.h"
 #include "io_context_pool.h"
@@ -129,46 +130,17 @@ bool TinyServer::initGame()
     return true;
 }
 
-bool TinyServer::onTick()
+void TinyServer::onTick()
 {
     gameUpdate();
 
     // 本拍到达的消息全部在这一拍交给业务。业务与定时器回调共享"无需加锁"
     // 这个前提，前提成立靠的就是它们在同一拍内串行发生（ADR-0004）。
-    drainInboundMessages();
-
-    return true;
-}
-
-void TinyServer::drainInboundMessages()
-{
-    // getAllTasks() 只在拷贝任务表那一小段持锁。分发时绝不能握着这把锁：
-    // io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发会把它挡在门外。
-    const std::vector<TinyTaskPtr> tasks = sTinyTaskManager.getAllTasks();
-
-    size_t message_count = 0;
-    for (const auto& task : tasks)
-    {
-        // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
-        const std::shared_ptr<cncpp::Session> session = task->getSession();
-        if (!session)
-        {
-            continue;
-        }
-
-        // 抽干。会话已关闭也要照做：close() 之后队列里已解码的帧仍然要交给业务（A6）。
-        cncpp::NetworkMessage message;
-        while (session->getReceiveQueue().pop(message))
-        {
-            onMessageReceived(message, task->getClientIP());
-            ++message_count;
-        }
-    }
-
-    if (message_count > 0)
-    {
-        LOG_DEBUG("TinyServer tick dispatched {} messages from {} tasks", message_count, tasks.size());
-    }
+    //
+    // 抽干收口在 TaskManager 基类：三个服务端原本各有一份逐字重复的实现，加了
+    // 每 task 上限之后更容易改一处漏两处。消息一律交回 TinyTask::processMessage()
+    // 自己分发，server 层不再插手。
+    sTinyTaskManager.drainInboundMessages(sMainConfig.max_messages_per_task_per_tick());
 }
 
 void TinyServer::gameUpdate()

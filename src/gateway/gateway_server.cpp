@@ -1,4 +1,5 @@
 #include "gateway_server.h"
+#include "config.h"
 #include "Misc.h"
 #include "gate_task_manager.h"
 #include "gate_user_manager.h"
@@ -341,13 +342,17 @@ void GatewayServer::onClientConnected(tcp::socket&& sock)
     }
 }
 
-bool GatewayServer::onTick()
+void GatewayServer::onTick()
 {
     static uint32_t tick_count = 0;
 
     // 本拍到达的消息全部在这一拍交给业务。业务与定时器回调共享"无需加锁"
     // 这个前提，前提成立靠的就是它们在同一拍内串行发生（ADR-0004）。
-    drainInboundMessages();
+    //
+    // 抽干收口在 TaskManager 基类：三个服务端原本各有一份逐字重复的实现，加了
+    // 每 task 上限之后更容易改一处漏两处。消息一律交回 GateTask::processMessage()
+    // 自己分发——认证态机只有它知道，同一个连接上两类帧的先后顺序也由它保证。
+    sGateTaskManager.drainInboundMessages(sMainConfig.max_messages_per_task_per_tick());
 
     if (++tick_count % 100 == 0)
     {
@@ -360,41 +365,6 @@ bool GatewayServer::onTick()
         //LOG_DEBUG("Gateway tick - active tasks: {}, online users: {}, tiny_connected: {}, data_connected: {}",
         //          sGateTaskManager.getStats().active_tasks, sGateUserManager.getOnlineUserCount(), tiny_connected,
         //          data_connected);
-    }
-
-    return true;
-}
-
-void GatewayServer::drainInboundMessages()
-{
-    // getAllTasks() 只在拷贝任务表那一小段持锁。分发时绝不能握着这把锁：
-    // io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发会把它挡在门外。
-    const std::vector<GateTaskPtr> tasks = sGateTaskManager.getAllTasks();
-
-    size_t message_count = 0;
-    for (const auto& task : tasks)
-    {
-        // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
-        const std::shared_ptr<cncpp::Session> session = task->getSession();
-        if (!session)
-        {
-            continue;
-        }
-
-        // 抽干。会话已关闭也要照做：close() 之后队列里已解码的帧仍然要交给业务（A6）。
-        cncpp::NetworkMessage message;
-        while (session->getReceiveQueue().pop(message))
-        {
-            // 交给任务自己分发：PENDING/INITIALIZING 走认证、EXECUTING 走业务，
-            // 这个状态机只有 GateTask 知道，同一个连接上两类帧的先后顺序也由它保证。
-            task->processMessage(message);
-            ++message_count;
-        }
-    }
-
-    if (message_count > 0)
-    {
-        LOG_DEBUG("GatewayServer tick dispatched {} messages from {} tasks", message_count, tasks.size());
     }
 }
 

@@ -36,7 +36,7 @@ protected:
     bool onInit() override;
     bool onStart() override;
     void onStop() override;
-    bool onTick() override;
+    void onTick() override;
 
 private:
     /**

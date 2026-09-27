@@ -21,13 +21,10 @@ public:
     bool onInit() override;
     bool onStart() override;
     void onStop() override;
-    bool onTick() override;
+    void onTick() override;
 
 private:
     void onConnectionCreated(tcp::socket&& sock);
-
-    // 每拍把所有任务会话的接收队列抽干
-    void drainInboundMessages();
 
     bool initAcceptor();
     bool startAcceptor();

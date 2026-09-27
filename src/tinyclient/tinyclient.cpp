@@ -1,4 +1,5 @@
 #include "tinyclient.h"
+#include "config.h"
 #include "logger.h"
 #include "message_ids.h"
 
@@ -45,10 +46,22 @@ void TinyClient::processMessages()
         return;
     }
 
+    // 每拍每个连接的处理上限，0 = 不限（抽干）。配置说明见 config.h。
+    const uint32_t budget = sMainConfig.max_messages_per_task_per_tick();
+
+    // 已断开的连接必须抽干：留到下一拍就没人再取了（A6）。
+    const bool drain_all = (budget == 0) || !isConnected();
+
     cncpp::NetworkMessage message;
+    uint32_t              handled = 0;
     while (getSession()->getReceiveQueue().pop(message))
     {
         onMessageReceived(message);
+
+        if (!drain_all && ++handled >= budget)
+        {
+            break;
+        }
     }
 }
 

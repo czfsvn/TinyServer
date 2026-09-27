@@ -115,7 +115,7 @@ namespace cncpp
     class MainConfig : public ConfigModule
     {
     public:
-        MainConfig() : daemon(false), app_name("network_app")
+        MainConfig() : daemon(false), app_name("network_app"), max_messages_per_task_per_tick(0)
         {
         }
 
@@ -128,6 +128,7 @@ namespace cncpp
             asio_pool_size.ReadFromTree(tree, "main", "asio_pool_size");
             log_yml_path.ReadFromTree(tree, "main", "log_yml_path");
             config_dir.ReadFromTree(tree, "main", "config_dir");
+            max_messages_per_task_per_tick.ReadFromTree(tree, "main", "max_messages_per_task_per_tick");
         }
 
     public:
@@ -138,6 +139,12 @@ namespace cncpp
         ConfigItem<uint16_t>    asio_pool_size;
         ConfigItem<std::string> log_yml_path;
         ConfigItem<std::string> config_dir;
+        // 每拍每个 task 最多处理多少条入站消息。0 = 不限（抽干，见 ADR-0004）。
+        //
+        // 抽干让单拍耗时没有上界：连接多 + 突发流量时一拍就会跑爆，主循环定时器
+        // 随即落后，而 ADR-0001 规定时间轮不做补拍，于是时间轮整体走慢且再也追不回来。
+        // 配成正数即给单拍耗时设上界，超出的消息留到下一拍，代价是延迟上升、吞吐不变。
+        ConfigItem<uint32_t>    max_messages_per_task_per_tick;
     };
 
     // 加密配置类

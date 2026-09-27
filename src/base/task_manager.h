@@ -11,6 +11,10 @@
 namespace cncpp
 {
 
+    // drainInboundMessages() 的默认模板实参。这里只做前置声明、不 include
+    // message.h，是为了让这个通用任务管理器不依赖网络层。
+    struct NetworkMessage;
+
     /**
  * @brief 通用任务管理器模板类
  * 
@@ -290,6 +294,56 @@ namespace cncpp
                     callback(pair.second);
                 }
             }
+        }
+
+        /**
+     * @brief 每拍把所有任务的接收队列抽干（ADR-0004）
+     *
+     * 三个服务端原本各有一份逐字重复的实现，收口到这里：消息一律交回
+     * TaskType::processMessage()，由任务自己分发。
+     *
+     * 注意它不能用 foreach()/foreachActive() —— 那两个是持锁回调的，而分发绝不能
+     * 握着这把锁：io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发
+     * 会把它挡在门外。所以这里先拷快照、解锁之后再分发。
+     *
+     * @param max_per_task 每个任务本拍最多处理多少条。0 = 不限（抽干）；配成正数
+     *                     给单拍耗时设上界，超出的留到下一拍（吞吐不变、延迟上升）。
+     * @return 本拍分发的消息总数
+     */
+        template <typename MessageType = NetworkMessage>
+        size_t drainInboundMessages(uint32_t max_per_task = 0)
+        {
+            const std::vector<TaskPtr> tasks = getAllTasks();
+
+            size_t message_count = 0;
+            for (const auto& task : tasks)
+            {
+                // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
+                const auto session = task->getSession();
+                if (!session)
+                {
+                    continue;
+                }
+
+                // 已停止的任务必须抽干：close() 之后队列里已解码的帧仍然要交给业务（A6），
+                // 留到下一拍的话 session_ 已经置空，这些帧就永远没人取了。
+                const bool drain_all = (max_per_task == 0) || !task->isActive();
+
+                MessageType message;
+                uint32_t    handled = 0;
+                while (session->getReceiveQueue().pop(message))
+                {
+                    task->processMessage(message);
+                    ++message_count;
+
+                    if (!drain_all && ++handled >= max_per_task)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return message_count;
         }
 
     protected:

@@ -38,9 +38,8 @@ public:
 
     /**
      * @brief 派生类更新钩子
-     * @return 是否成功
      */
-    bool onTick() override;
+    void onTick() override;
 
 private:
     void finalAll();
@@ -54,11 +53,6 @@ private:
     // 处理消息
     void onMessageReceived(const cncpp::NetworkMessage& message, const std::string& session_info);
 
-    // 每拍把所有任务会话的接收队列抽干
-    void drainInboundMessages();
-
-    void tick();
-
     void stopAcceptor();
     bool initAcceptor();
     bool startAcceptor();
@@ -67,9 +61,6 @@ private:
 
 private:
     std::shared_ptr<cncpp::Acceptor> acceptor_;
-    uint64_t                         last_tick_ms_       = 0;
-    uint32_t                         update_interval_ms_ = 0;
-    bool                             is_running_         = false;
 };
 
 #define sTinyServer TinyServer::getMe()

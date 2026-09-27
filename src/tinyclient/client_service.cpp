@@ -51,7 +51,7 @@ void ClientService::onStop()
     LOG_INFO("ClientService stopped");
 }
 
-bool ClientService::onTick()
+void ClientService::onTick()
 {
     // 每拍都要抽干。原来这里每 100 拍才调用一次（50ms 一格就是 5 秒），
     // 期间客户端的接收队列被写满，Session 就开始丢帧了（A6）。
@@ -63,8 +63,6 @@ bool ClientService::onTick()
         LOG_DEBUG("ClientService tick - connected: {}/{}", sClientManager.getConnectedCount(),
                   sClientManager.getClientCount());
     }
-
-    return true;
 }
 
 TinyClientPtr ClientService::getClient(uint32_t index)
