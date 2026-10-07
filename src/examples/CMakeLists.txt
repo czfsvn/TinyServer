@@ -20,7 +20,10 @@ target_link_libraries(readxml PRIVATE base)
 add_executable(timer_verify timer_verify.cpp)
 target_link_libraries(timer_verify PRIVATE base)
 
-# SPSC 队列行为验证程序: [5] 双线程那条只有在 TSAN 下才有意义.
+# 队列行为验证程序: [3][5] 两条并发用例只有在 TSAN 下才有意义.
+# [5] 复刻了 network.cpp 的 is_sending_ 双检握手 —— 那是本次改动唯一有真实
+# 并发风险的地方(lost wakeup 偶发难复现), 所以它放在默认构建的 examples 里而不是
+# 只在不带 ENABLE_TESTS 才编的 gtest 里, 免得大多数人跑不到.
 # 零依赖版本(同样的用例另有一份 gtest 版, 见 src/tests/), 装不了 GoogleTest 也能跑
-add_executable(spsc_queue_verify spsc_queue_verify.cpp)
-target_link_libraries(spsc_queue_verify PRIVATE base)
+add_executable(message_queue_verify message_queue_verify.cpp)
+target_link_libraries(message_queue_verify PRIVATE base)

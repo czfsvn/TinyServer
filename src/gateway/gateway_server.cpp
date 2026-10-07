@@ -352,7 +352,8 @@ void GatewayServer::onTick()
     // 抽干收口在 TaskManager 基类：三个服务端原本各有一份逐字重复的实现，加了
     // 每 task 上限之后更容易改一处漏两处。消息一律交回 GateTask::processMessage()
     // 自己分发——认证态机只有它知道，同一个连接上两类帧的先后顺序也由它保证。
-    sGateTaskManager.drainInboundMessages(sMainConfig.max_messages_per_task_per_tick());
+    sGateTaskManager.drainInboundMessages(
+        sMainConfig.max_messages_per_task_per_tick(), sMainConfig.max_messages_per_tick());
 
     if (++tick_count % 100 == 0)
     {

@@ -1,0 +1,37 @@
+# ============================================================
+# TinyServer - 不进版本库的产物
+# ============================================================
+
+# ---- CMake 构建树 ----
+# 默认 build/；自己 -B 出来的（build-tsan、build-release ...）一并忽略。
+# 注意目录里的一切都是生成的，所以按目录整棵忽略，不单列 .o/.a。
+build/
+build-*/
+testrun*/
+
+# ---- CMake 生成物（有人就地 configure 时兜底）----
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+
+# ---- MSVC 中间产物 ----
+# Windows 侧跑 cmake 会留下这些（src/tools/xml_codegen/build 里见过一堆 .tlog）
+.vs/
+*.tlog
+*.obj
+*.pdb
+*.ilk
+*.idb
+
+# ---- 运行日志 ----
+# 服务/工具跑出来的，不是源码
+src/tools/logs/
+*.log
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -8,6 +8,8 @@
 
 #include <execinfo.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <cerrno>
@@ -90,6 +92,11 @@ namespace
         sa.sa_handler = SIG_DFL;
         sigaction(sig, &sa, nullptr);
         raise(sig);
+
+        // 4. 兜底退出。raise + SIG_DFL 对崩溃信号本就意味着终止，但如果中途被别的
+        //    库把该信号改回自定义 handler，raise 不会终止进程，handler 返回后会在
+        //    已破坏的现场上继续执行，演变成反复崩溃。_exit 是 async-signal-safe 的。
+        _exit(128 + sig);
     }
 }  // anonymous namespace
 
@@ -108,16 +115,62 @@ void cncpp::CrashHandler::init(const std::string& /*dump_dir*/)
         LOG_WARN("Failed to set RLIMIT_CORE: {}", strerror(errno));
     }
 
-    // 尝试写 core_pattern（需要 root 权限，非 root 静默失败）
-    int fd = open("/proc/sys/kernel/core_pattern", O_WRONLY);
-    if (fd >= 0)
+    // 容器里 dumpable 标志可能是关的（Docker 默认、或进程 setuid 之后），
+    // 内核会直接跳过 core 生成，上面的 RLIMIT_CORE 设了也没用。显式打开。
+    if (prctl(PR_SET_DUMPABLE, 1) == 0)
     {
-        const char pattern[] = "core.%e.%p.%t";
-        if (write(fd, pattern, sizeof(pattern) - 1) > 0)
+        LOG_INFO("Core dump: PR_SET_DUMPABLE enabled");
+    }
+    else
+    {
+        LOG_WARN("Failed to set PR_SET_DUMPABLE: {}", strerror(errno));
+    }
+
+    // core_pattern 只读取记录、不再写入：它是全局系统设置，改它会影响机器上所有
+    // 进程，且相对路径在部分内核上会导致 core 生成失败。
+    {
+        const int pfd = open("/proc/sys/kernel/core_pattern", O_RDONLY);
+        if (pfd >= 0)
         {
-            LOG_INFO("core_pattern set to: {}", pattern);
+            char    pattern[256] = {0};
+            ssize_t n            = read(pfd, pattern, sizeof(pattern) - 1);
+            close(pfd);
+            if (n > 0)
+            {
+                while (n > 0 && (pattern[n - 1] == '\n' || pattern[n - 1] == '\0'))
+                {
+                    pattern[--n] = '\0';
+                }
+                LOG_INFO("core_pattern = {} (core 将落在它指定的位置)", pattern);
+            }
         }
-        close(fd);
+    }
+
+    // 备用信号栈：崩溃原因是爆栈时，内核在已经溢出的栈上压不出 handler 帧，
+    // handler 根本不会执行 —— 既没有 backtrace 也没有 core，而爆栈恰恰最需要 core。
+    // 必须是静态存储期：handler 要用到它。
+    constexpr size_t kAltStackSize = 64 * 1024;
+    static char      alt_stack[kAltStackSize];
+
+    stack_t ss;
+    memset(&ss, 0, sizeof(ss));
+    ss.ss_sp    = alt_stack;
+    ss.ss_size  = kAltStackSize;
+    ss.ss_flags = 0;
+    if (sigaltstack(&ss, nullptr) != 0)
+    {
+        LOG_WARN("Failed to set alternative signal stack: {}", strerror(errno));
+    }
+
+    // SIGPIPE 不是崩溃：网络程序里对已关闭的连接写一次就会触发。当崩溃处理会让
+    // 服务在正常运行中频繁"崩溃"并生成 core。忽略它，让写调用返回 EPIPE 交给代码。
+    struct sigaction ign;
+    memset(&ign, 0, sizeof(ign));
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    if (sigaction(SIGPIPE, &ign, nullptr) == 0)
+    {
+        LOG_INFO("SIGPIPE ignored (not treated as a crash)");
     }
 
     // 注册崩溃信号（sigaction 同步处理）
@@ -125,9 +178,10 @@ void cncpp::CrashHandler::init(const std::string& /*dump_dir*/)
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = posixCrashHandler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_SIGINFO;  // 三参数 handler
+    // SA_ONSTACK：栈溢出时切到上面那块备用栈执行，否则 handler 起不来
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
 
-    const int crash_sigs[] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS, SIGPIPE};
+    const int crash_sigs[] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS};
     for (int s : crash_sigs)
     {
         if (sigaction(s, &sa, nullptr) == 0)

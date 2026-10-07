@@ -13,6 +13,7 @@ target_include_directories(base
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${MYSQL_INCLUDE_DIR}
         ${MYSQLPP_INCLUDE_DIR}
+        ${THIRD_PARTY_INCLUDE_DIR}
 )
 
 # 编译选项（Debug/Release 自动适配，由 compiler_options.cmake 控制全局）

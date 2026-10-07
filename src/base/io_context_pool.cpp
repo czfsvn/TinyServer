@@ -56,6 +56,8 @@ namespace cncpp
                 auto& wrapper   = io_contexts_[i];
                 wrapper.context = std::make_shared<boost::asio::io_context>();
                 wrapper.work    = makeWorkGuard(*wrapper.context);
+                // 支持 cleanup() 之后重新 init()：此时 resize 是空操作，计数必须显式归零
+                wrapper.assigned_ = 0;
             }
 
             // setTimerCallback() 显式指定的周期优先于配置；配置只作为默认值
@@ -258,6 +260,47 @@ namespace cncpp
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return io_contexts_.size();
+    }
+
+    boost::asio::io_context& IOContextPool::getAcceptContext()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (!initialized_.load(std::memory_order_relaxed) || !main_io_context_)
+        {
+            throw std::runtime_error("IOContextPool not initialized");
+        }
+
+        return *main_io_context_;
+    }
+
+    boost::asio::io_context& IOContextPool::getSessionContext()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (!initialized_.load(std::memory_order_relaxed) || io_contexts_.empty())
+        {
+            throw std::runtime_error("IOContextPool not initialized");
+        }
+
+        // 轮询分发：连接建立时挑一个 context，之后不再迁移。
+        // 比"最少连接"简单，且不需要 Session 析构时反向回调本池（单例析构顺序不可控）。
+        const size_t index = next_index_.fetch_add(1, std::memory_order_relaxed) % io_contexts_.size();
+        io_contexts_[index].assigned_ += 1;
+        LOG_DEBUG("[IOContextPool] 新连接分配到 context {}/{}", index, io_contexts_.size());
+        return *io_contexts_[index].context;
+    }
+
+    uint64_t IOContextPool::getAssignedCount(size_t index) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (index >= io_contexts_.size())
+        {
+            return 0;
+        }
+
+        return io_contexts_[index].assigned_;
     }
 
     void IOContextPool::runIOContextPools()
@@ -517,9 +560,18 @@ namespace cncpp
         // 清理其他资源
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            io_contexts_.clear();
-            main_io_context_.reset();
+
+            // 销毁顺序不能反，原因就在 async_accept(session_ctx, ...) 这个重载：
+            // acceptor 挂在 main_io_context_ 上，但它 pending 的 accept op 里那个
+            // 新建 socket 属于某个 worker context。main_io_context_ 析构时会强制
+            // destroy 这些 op，op 的 handler 又要 move 那个 socket；此时若 worker
+            // context 已经被 clear()，socket 的 service 早就释放了 ——
+            // ASAN 实测是 heap-use-after-free（reactive_socket_service_base::base_move_construct）。
+            //
+            // 依赖方向是 main -> worker，所以必须先析构 main。
             main_timer_.reset();
+            main_io_context_.reset();
+            io_contexts_.clear();
 
             initialized_.store(false, std::memory_order_release);
             next_index_.store(0, std::memory_order_relaxed);

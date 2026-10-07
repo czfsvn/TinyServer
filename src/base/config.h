@@ -115,7 +115,9 @@ namespace cncpp
     class MainConfig : public ConfigModule
     {
     public:
-        MainConfig() : daemon(false), app_name("network_app"), max_messages_per_task_per_tick(0)
+        MainConfig()
+            : daemon(false), app_name("network_app"), max_messages_per_task_per_tick(0), max_messages_per_tick(0),
+              receive_queue_capacity(256), send_queue_capacity(1024)
         {
         }
 
@@ -129,6 +131,9 @@ namespace cncpp
             log_yml_path.ReadFromTree(tree, "main", "log_yml_path");
             config_dir.ReadFromTree(tree, "main", "config_dir");
             max_messages_per_task_per_tick.ReadFromTree(tree, "main", "max_messages_per_task_per_tick");
+            max_messages_per_tick.ReadFromTree(tree, "main", "max_messages_per_tick");
+            receive_queue_capacity.ReadFromTree(tree, "main", "receive_queue_capacity");
+            send_queue_capacity.ReadFromTree(tree, "main", "send_queue_capacity");
         }
 
     public:
@@ -143,8 +148,39 @@ namespace cncpp
         //
         // 抽干让单拍耗时没有上界：连接多 + 突发流量时一拍就会跑爆，主循环定时器
         // 随即落后，而 ADR-0001 规定时间轮不做补拍，于是时间轮整体走慢且再也追不回来。
-        // 配成正数即给单拍耗时设上界，超出的消息留到下一拍，代价是延迟上升、吞吐不变。
+        // 配成正数即给单拍耗时设上界，超出的消息留到下一拍。
+        //
+        // 代价不只是延迟上升：接收队列有入队侧上限（见 receive_queue_capacity），
+        // 限量降低了消费速率，持续跟不上时队列会填满，此后 io 线程直接丢弃新消息
+        // 并计数告警（见 network.cpp 的 enqueue）。也就是说这是拿"突发时丢消息"
+        // 换"定时器不落后"，不是免费的。单连接消费能力上限约为
+        // 本值 × (1000 / main_loop_interval_ms) 条/秒，配的时候照这个算：
+        // 低于持续入队速率就会一直丢。
         ConfigItem<uint32_t>    max_messages_per_task_per_tick;
+        // 每拍所有 task 合计最多处理多少条入站消息。0 = 不限。
+        //
+        // 每 task 的上限挡不住连接数这个维度：1 万连接 × 每连接 64 条 = 64 万条/拍，
+        // 照样把一拍跑爆。这个值是整拍的硬上界，与轮转配套保证连接之间公平。
+        ConfigItem<uint32_t>    max_messages_per_tick;
+        // 每条连接的**接收**队列上限（条数）。到上限后 io 线程丢弃新帧并计数告警。
+        //
+        // 底层队列本身是无界的（moodycamel::ConcurrentQueue），这个上限是我们自己
+        // 在入队侧加的闸门（见 my_concurrent_queue.h 与 ADR-0010）。它同时锁住内存
+        // 高水位：moodycamel 的 block 只回收进内部 free list、从不归还系统，不设
+        // 闸的话涨过一次就永久占着。
+        //
+        // 只在启动时读取，运行中不可改（项目没有配置热更新通道，signal_handler.cpp
+        // 的 SIGHUP 还是个空 TODO）。见 ADR-0010 里"为什么不做运行时修改接口"。
+        ConfigItem<uint32_t>    receive_queue_capacity;
+        // 每条连接的**发送**队列上限（条数）。到上限后丢弃待发帧并计数告警。
+        //
+        // 这个值比接收侧大：发送侧会出现瞬时冲高（一次全服广播、一拍内对同一连接
+        // 产生多条响应），等一拍就发完了，取小了会在广播风暴时误弃载。
+        //
+        // 它同时修掉一个既存隐患：send_queue_ 早先是无界的，而对端不读数据时
+        // async_write 悬着、is_sending_ 一直为 true，后续 send() 只入队不 kick，
+        // 队列会一直涨 —— 一个不读数据的客户端能让服务器内存无上限增长。
+        ConfigItem<uint32_t>    send_queue_capacity;
     };
 
     // 加密配置类

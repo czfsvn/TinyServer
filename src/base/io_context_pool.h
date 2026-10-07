@@ -47,8 +47,22 @@ namespace cncpp
         // 获取主 IO 上下文（用于定时器等特殊任务）
         boost::asio::io_context& getMainIOContext();
 
-        // 获取池大小
+        // 获取 accept 专用 io_context（目前即 main_io_context_）。
+        // acceptor 只做 accept，单次开销极小，不需要独占线程；
+        // 把它从工作池里摘出来，accept 的抖动就不会挤占 Session 的 IO。
+        boost::asio::io_context& getAcceptContext();
+
+        // 获取一个承载 Session 的 io_context（轮询方式）。
+        // Acceptor 在建连时用它挑目标 context，之后这条连接的整个生命周期都绑在上面。
+        boost::asio::io_context& getSessionContext();
+
+        // 获取池大小（= context 数 = worker 线程数）
         size_t getPoolSize() const;
+
+        // 可观测性：某个 context 累计被分配到的连接数。
+        // 只增不减——减需要 Session 析构时反向调用本池，而单例析构顺序不可控，
+        // 拿"当前连接数"不值得冒那个 use-after-free 的险。
+        uint64_t getAssignedCount(size_t index) const;
 
         // 运行所有io_context（阻塞调用）
         void run();
@@ -81,12 +95,16 @@ namespace cncpp
     public:
         std::shared_ptr<cncpp::Acceptor> createAcceptor(short port, Acceptor::ConnectionCallback callback)
         {
-            return std::make_shared<cncpp::Acceptor>(getIoContext(), port, callback);
+            // acceptor 自己跑在 main io_context 上；新连接由 picker 分发到各个工作 context。
+            // 这样 N 个 context 才真的都会分到 Session（原来 acceptor 建在 ctx0 上，
+            // 于是所有连接全堆在 ctx0，其余 N-1 个 context 全程空转）。
+            return std::make_shared<cncpp::Acceptor>(getAcceptContext(), port, callback,
+                [this]() -> boost::asio::io_context& { return getSessionContext(); });
         }
 
         std::shared_ptr<cncpp::Connector> createConnector()
         {
-            return std::make_shared<cncpp::Connector>(getIoContext());
+            return std::make_shared<cncpp::Connector>(getSessionContext());
         }
 
         void setTimerCallback(std::function<void()> callback, const uint32_t interval_ms = 1000);
@@ -108,6 +126,11 @@ namespace cncpp
             std::shared_ptr<boost::asio::io_context> context;
             std::unique_ptr<IOContextWorkGuard>      work;
             std::thread                              thread;
+            // 累计分配到该 context 的连接数，仅用于可观测性（见 getAssignedCount）。
+            //
+            // 故意用普通 size_t 而不是 atomic：所有读写都在 mutex_ 下，不需要原子；
+            // 而 atomic 成员会让本结构体不可移动，vector::resize 直接编不过。
+            size_t assigned_ = 0;
         };
 
         // 主定时器 handler：负责过滤 error_code（cancel/aborted）后再驱动 updateTimer

@@ -127,7 +127,8 @@ void DataServer::onTick()
     // 抽干收口在 TaskManager 基类：三个服务端原本各有一份逐字重复的实现，加了
     // 每 task 上限之后更容易改一处漏两处。消息一律交回 DataTask::processMessage()
     // 自己分发，server 层不再插手。
-    sDataTaskManager.drainInboundMessages(sMainConfig.max_messages_per_task_per_tick());
+    sDataTaskManager.drainInboundMessages(
+        sMainConfig.max_messages_per_task_per_tick(), sMainConfig.max_messages_per_tick());
 
     static uint32_t tick_count = 0;
     if (++tick_count % 100 == 0)

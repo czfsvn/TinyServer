@@ -306,49 +306,109 @@ namespace cncpp
      * 握着这把锁：io 线程 accept 到新连接要在 addTask 上拿同一把锁，一次慢分发
      * 会把它挡在门外。所以这里先拷快照、解锁之后再分发。
      *
-     * @param max_per_task 每个任务本拍最多处理多少条。0 = 不限（抽干）；配成正数
-     *                     给单拍耗时设上界，超出的留到下一拍（吞吐不变、延迟上升）。
+     * @param max_per_task 每个任务本拍最多处理多少条。0 = 不限（抽干）。
+     * @param max_total    本拍所有任务合计最多处理多少条。0 = 不限。它是硬上界：
+     *                     max_per_task 挡不住连接数这个维度（1 万连接 × 每连接
+     *                     上限 64 条 = 64 万条/拍，照样跑爆一拍）。
      * @return 本拍分发的消息总数
      */
         template <typename MessageType = NetworkMessage>
-        size_t drainInboundMessages(uint32_t max_per_task = 0)
+        size_t drainInboundMessages(uint32_t max_per_task = 0, uint32_t max_total = 0)
         {
             const std::vector<TaskPtr> tasks = getAllTasks();
+            if (tasks.empty())
+            {
+                return 0;
+            }
 
             size_t message_count = 0;
+
+            // 第一遍：已停止的任务全量抽干，不受任何预算约束（A6）。
+            // close() 之后队列里已解码的帧仍然要交给业务，留到下一拍 session_ 就已
+            // 置空，这些帧永远没人取了。已停止的任务不会再有新消息进来，残留量有界，
+            // 所以这里不会变成新的耗时漏洞。
             for (const auto& task : tasks)
             {
-                // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
-                const auto session = task->getSession();
-                if (!session)
+                if (!task->isActive())
                 {
+                    message_count += drainOneTask<MessageType>(task, 0);
+                }
+            }
+
+            // 第二遍：活跃任务，轮转 + 整拍预算。
+            // 轮转是预算的配套：有了上限之后每拍只能服务前若干个任务，如果每拍都
+            // 从头开始，靠后的任务会被永久饿死。
+            const size_t start = drain_cursor_ % tasks.size();
+            size_t       i     = 0;
+            for (; i < tasks.size(); ++i)
+            {
+                if (max_total > 0 && message_count >= max_total)
+                {
+                    break;
+                }
+
+                const auto& task = tasks[(start + i) % tasks.size()];
+
+                // 已停止的任务不限量（A6）。第一遍抽的是快照时刻就已经停了的，这里
+                // 兜住快照之后才被 io 线程 stop 掉的：它们不再有新消息进来，若受预算
+                // 约束留下残留，下一拍 session_ 已置空，这些帧就永远没人取了。
+                // 对第一遍已抽空的 task，再 pop 一次直接返回 false，成本是一次原子读。
+                if (!task->isActive())
+                {
+                    message_count += drainOneTask<MessageType>(task, 0);
                     continue;
                 }
 
-                // 已停止的任务必须抽干：close() 之后队列里已解码的帧仍然要交给业务（A6），
-                // 留到下一拍的话 session_ 已经置空，这些帧就永远没人取了。
-                const bool drain_all = (max_per_task == 0) || !task->isActive();
-
-                MessageType message;
-                uint32_t    handled = 0;
-                while (session->getReceiveQueue().pop(message))
+                // 本拍额度受两个上限约束，取更紧的那个
+                uint32_t budget = max_per_task;
+                if (max_total > 0)
                 {
-                    task->processMessage(message);
-                    ++message_count;
-
-                    if (!drain_all && ++handled >= max_per_task)
-                    {
-                        break;
-                    }
+                    const uint32_t remaining = static_cast<uint32_t>(max_total - message_count);
+                    budget = (max_per_task == 0 || max_per_task > remaining) ? remaining : max_per_task;
                 }
+                message_count += drainOneTask<MessageType>(task, budget);
             }
+
+            // 下次从断点继续。跑完一圈时 (start + size) % size == start，自然回到原点
+            drain_cursor_ = (start + i) % tasks.size();
 
             return message_count;
         }
 
     protected:
+        /// 抽干单个任务，最多 max_count 条（0 = 不限）。返回实际处理条数。
+        template <typename MessageType>
+        size_t drainOneTask(const TaskPtr& task, uint32_t max_count)
+        {
+            // 任务 stop() 之后 session_ 会被置空，而这是一拍开头拿的快照。
+            const auto session = task->getSession();
+            if (!session)
+            {
+                return 0;
+            }
+
+            MessageType message;
+            uint32_t    handled = 0;
+            size_t      count   = 0;
+            while (session->getReceiveQueue().tryPop(message))
+            {
+                task->processMessage(message);
+                ++count;
+
+                if (max_count > 0 && ++handled >= max_count)
+                {
+                    break;
+                }
+            }
+            return count;
+        }
+
         mutable std::mutex                    mutex_;  // 保护锁
         std::unordered_map<uint32_t, TaskPtr> tasks_;  // task_id -> Task
+        // 轮转游标：下一拍从哪个任务开始。只在 tick 线程上读写，无需加锁。
+        // 注意 tasks_ 是 unordered_map，插入/删除后遍历顺序会重排，所以轮转只能
+        // 消除"每拍都从头开始"的系统性偏差，做不到严格公平。
+        size_t drain_cursor_ = 0;
     };
 
 }  // namespace cncpp

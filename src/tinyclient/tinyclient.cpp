@@ -54,7 +54,7 @@ void TinyClient::processMessages()
 
     cncpp::NetworkMessage message;
     uint32_t              handled = 0;
-    while (getSession()->getReceiveQueue().pop(message))
+    while (getSession()->getReceiveQueue().tryPop(message))
     {
         onMessageReceived(message);
 

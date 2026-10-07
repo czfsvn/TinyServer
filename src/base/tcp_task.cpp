@@ -90,8 +90,30 @@ namespace cncpp
 
         try
         {
-            // todo: 发送消息到会话
-            // session_->send(message);
+            // 按 data_ 的实际类型选发送重载，message_id 沿用入站帧的 id：
+            // 帧头的 format_ 与 body 的语义必须一致，否则对端解不开。
+            const uint32_t message_id = message.header_.message_id_;
+
+            if (message.isProtobuf())
+            {
+                const google::protobuf::Message* proto = message.getProtobuf();
+                if (!proto)
+                {
+                    LOG_WARN("TcpTask drop message with null protobuf, task_id: {}", task_id_);
+                    return false;
+                }
+                session_->send(*proto, message_id);
+            }
+            else if (const std::string* body = message.getBody())
+            {
+                session_->send(*body, message_id, message.header_.format_);
+            }
+            else
+            {
+                LOG_WARN("TcpTask drop empty message, task_id: {}, message_id: {}", task_id_, message_id);
+                return false;
+            }
+
             updateLastActiveTime();
 
             return true;

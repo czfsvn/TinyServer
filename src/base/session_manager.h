@@ -108,7 +108,7 @@ namespace cncpp
             // 抽干，而不是每拍一条：每拍一条会把单连接吞吐锁死在
             // 1000 / main_loop_interval_ms 条/秒（ADR-0004）。
             MessageType message;
-            while (si.session->getReceiveQueue().pop(message))
+            while (si.session->getReceiveQueue().tryPop(message))
             {
                 message_handler(message, si.info);
             }
