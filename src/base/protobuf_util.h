@@ -2,14 +2,15 @@
 #define PROTOBUF_UTIL_H
 
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include <google/protobuf/descriptor.h>
 #include <google/protobuf/dynamic_message.h>
 #include <google/protobuf/message.h>
 
 #include "logger.h"
-#include "message_ids.h"
 
 namespace cncpp
 {
@@ -306,6 +307,89 @@ namespace cncpp
                     return false;
             }
         }
+    };
+
+    // ======== protobuf 类型注册表 ========
+    //
+    // msgname -> prototype。prototype 是 DynamicMessageFactory 造出来的空实例，
+    // 每帧用它 New() 出的 DynamicMessage 就是解码的目标对象。
+    //
+    // 三个要点（ADR-0011）：
+    //   1. 产出的是 DynamicMessage，**不是**编译期生成类型。业务只能走反射 API
+    //      访问字段，dynamic_cast 到具体类型恒为 nullptr。
+    //   2. io 线程每帧查一次，所以命中路径必须是只读快照、不抢锁（ADR-0005：
+    //      解码分派不能每包抢 mutex）。
+    //   3. DynamicMessageFactory 不是线程安全的，所以它只在**建快照**时被触碰
+    //      一次；之后每帧只调已缓存 prototype 的 New()，工厂不再参与。
+    class ProtobufTypeRegistry
+    {
+    public:
+        using Snapshot = std::unordered_map<std::string, const google::protobuf::Message*>;
+
+        static ProtobufTypeRegistry& instance()
+        {
+            static ProtobufTypeRegistry instance;
+            return instance;
+        }
+
+        // 返回该名字的 prototype；查不到返回 nullptr。
+        //
+        // 查不到不缓存：pool 里没有就是没有（类型没链进二进制，或名字拼错），
+        // 缓存 nullptr 会让"曾经查不到"永久化，热更/后加载的类型就再也进不来。
+        const google::protobuf::Message* prototype(const std::string& msg_name)
+        {
+            {
+                const auto snap = std::atomic_load(&snapshot_);
+                const auto it   = snap->find(msg_name);
+                if (it != snap->end())
+                {
+                    return it->second;
+                }
+            }
+
+            std::unique_lock<std::mutex> lock(mutex_);
+
+            // 双重检查：另一个 io 线程可能刚刚把它填进去
+            auto                         snap = std::atomic_load(&snapshot_);
+            auto                         it   = snap->find(msg_name);
+            if (it != snap->end())
+            {
+                return it->second;
+            }
+
+            const google::protobuf::Descriptor* descriptor
+                = google::protobuf::DescriptorPool::generated_pool()->FindMessageTypeByName(msg_name);
+            if (!descriptor)
+            {
+                return nullptr;
+            }
+
+            const google::protobuf::Message* proto = factory_.GetPrototype(descriptor);
+            if (!proto)
+            {
+                LOG_ERROR("Failed to get prototype for: {}", msg_name);
+                return nullptr;
+            }
+
+            auto next = std::make_shared<Snapshot>(*snap);
+            next->emplace(msg_name, proto);
+            std::atomic_store(&snapshot_, std::shared_ptr<const Snapshot>(std::move(next)));
+            return proto;
+        }
+
+        // 造一个空的 DynamicMessage。返回 nullptr 表示这个名字不认得。
+        std::unique_ptr<google::protobuf::Message> create(const std::string& msg_name)
+        {
+            const google::protobuf::Message* proto = prototype(msg_name);
+            return proto ? std::unique_ptr<google::protobuf::Message>(proto->New()) : nullptr;
+        }
+
+    private:
+        ProtobufTypeRegistry() = default;
+
+        mutable std::mutex                              mutex_;
+        std::shared_ptr<const Snapshot>                 snapshot_ = std::make_shared<const Snapshot>();
+        google::protobuf::DynamicMessageFactory         factory_;
     };
 
 }  // namespace cncpp

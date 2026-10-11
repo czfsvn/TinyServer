@@ -4,10 +4,13 @@
 #include <array>
 #include <atomic>
 #include <boost/asio.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include "compression.h"
@@ -29,25 +32,76 @@ namespace cncpp
 
         void start();
 
-        // 以 kRaw 格式发送不透明字节
-        void send(const std::string& body, uint32_t message_id = 0);
-        // 以 kProtobuf 格式发送，body 是 message 的序列化结果
-        void send(const google::protobuf::Message& message, uint32_t message_id = 0);
-        // 显式指定载荷格式。压缩与加密标志由发送路径自行置位，不需要调用方传。
-        void send(const std::string& body, uint32_t message_id, PayloadFormat format);
+        // ======== 发送 ========
+        //
+        // body 前缀（裸结构体的 4 字节大端 msgindex、protobuf 的 64 字节 '\0'
+        // 填充 msgname）**只在这几个方法里拼一次**。让调用方自己拼，必然有人漏
+        // 掉填充或写错字节序——而那两种错误都不会有编译错误，只在对端表现为
+        // "解不出来"（ADR-0011）。
 
-        // 零拷贝发送：字节块已在调用方手里，入队时不再分配、不再复制。
-        // 广播时用 makeSharedPayload() 只序列化一次，把同一份 shared_ptr 交给所有
-        // 接收者 —— 这是"广播 N 人"从 N 次序列化 + N 份拷贝降为 1 次的入口。
-        void send(std::shared_ptr<const std::string> body, uint32_t message_id = 0);
-        void send(std::shared_ptr<const std::string> body, uint32_t message_id, PayloadFormat format);
+        // 裸结构体：msgindex + 一段已经是 pack(1) 的字节
+        void sendRawStruct(uint32_t msg_index, const void* struct_bytes, size_t size);
 
-        // 序列化一次，产出可广播共享的载荷。
+        template <class T>
+        void sendRawStruct(uint32_t msg_index, const T& value)
+        {
+            static_assert(std::is_trivially_copyable<T>::value, "裸结构体必须是 trivially copyable 的 POD");
+            static_assert(alignof(T) == 1, "裸结构体必须 1 字节对齐：alignof(T) == 1 即 pack(1) 的证明");
+            sendRawStruct(msg_index, &value, sizeof(T));
+        }
+
+        // ======== protobuf 发送 ========
+        template <class PROTO>
+        static std::shared_ptr<const std::string> makeSharedProtobufPayload(const PROTO& message)
+        {
+            static_assert(std::is_base_of<google::protobuf::Message, PROTO>::value,
+                          "makeSharedProtobufPayload 只接受 google::protobuf::Message 及其派生类型");
+
+            std::string body;
+            const auto& msg_name = message.GetDescriptor()->full_name();
+            if (!appendMsgName(body, msg_name))
+            {
+                LOG_ERROR("Dropping outgoing protobuf message: invalid msgname '{}' (empty or longer than {})",
+                          msg_name, kMaxMsgNameLength);
+                return nullptr;
+            }
+            body.append(ProtobufUtil::Serialize(message));
+            return std::make_shared<const std::string>(std::move(body));
+        }
+
+        template <class PROTO>
+        void sendProtoMsg(const PROTO& message)
+        {
+            static_assert(std::is_base_of<google::protobuf::Message, PROTO>::value,
+                          "sendProtoMsg 只接受 google::protobuf::Message 及其派生类型");
+
+            // 单播走这里是"每个 Session 序列化一次"。广播别逐个调这个，
+            // 而是 makeSharedProtobufPayload() 序列化一次、把同一份 shared_ptr 发给所有人。
+            if (auto payload = makeSharedProtobufPayload(message))
+            {
+                send(std::move(payload), PayloadFormat::kProtobuf);
+            }
+        }
+
+        // 沿用入站帧的类型标识回包（一问一答用）。刻意用**入站帧**的名字而不是
+        // 回包对象自己的类型名：客户端靠这个把请求与响应对上。广播与主动推送
+        // 没有入站帧，请用 sendProtoMsg / sendRawStruct。
+        void replyRawStruct(const NetworkMessage& request, const void* struct_bytes, size_t size);
+
+        // 零拷贝发送：载荷已在调用方手里，入队时不再分配、不再复制。
+        // 广播时用 makeShared*Payload() 只序列化一次，把同一份 shared_ptr 交给
+        // 所有接收者 —— 这是"广播 N 人"从 N 次序列化 + N 份拷贝降为 1 次的入口。
+        // 传入的 body 必须是**含类型标识前缀**的完整形态。
+        void send(std::shared_ptr<const std::string> body, PayloadFormat format);
+
+        // 序列化一次，产出可广播共享的载荷（已含类型标识前缀）。
         //
         // 刻意不提供"延迟到 io 线程再序列化"的版本：那会把 protobuf 对象的生命
         // 周期拖到 io 线程上，业务侧"复用同一个 msg 对象连发两次"的写法会静默
         // 出错（两条都看到最后一次的字段值），且只在特定时序下偶发。
-        static std::shared_ptr<const std::string> makeSharedPayload(const google::protobuf::Message& message);
+        static std::shared_ptr<const std::string> makeSharedRawPayload(uint32_t msg_index, const void* struct_bytes,
+                                                                       size_t size);
+        // 调用方已经拼好完整 body（含前缀）时用这个
         static std::shared_ptr<const std::string> makeSharedPayload(std::string body);
 
         void setEncryption(std::shared_ptr<EncryptionInterface> encryption);
@@ -90,13 +144,16 @@ namespace cncpp
         std::shared_ptr<EncryptionInterface>  encryption_;
         std::shared_ptr<CompressionInterface> compression_;
 
-        // 发送消息队列 (body, message_id, format)
+        // 发送消息队列 (body, format)
         //
         // body 是 shared_ptr<const string> 而不是 unique_ptr<string>：广播时 N 个
         // Session 共享同一份字节，序列化与内存分配都只发生一次。
         // const 是这里的要害 —— 同一份载荷会被多个 io 线程并发读（各 Session 分
         // 布在不同 context 上），只要有一处可写，"只读共享"就立刻变成数据竞争。
-        using SendQueueItem = std::tuple<std::shared_ptr<const std::string>, uint32_t, PayloadFormat>;
+        //
+        // 队列里不再带 message_id：v2 帧头删掉了它（ADR-0011），类型标识已在
+        // body 前缀里。
+        using SendQueueItem = std::tuple<std::shared_ptr<const std::string>, PayloadFormat>;
 
         // 用于读取消息：线上字节先进 header_buffer_，解码后才成为 current_header_
         std::array<unsigned char, kHeaderSize> header_buffer_;

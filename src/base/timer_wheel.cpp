@@ -1,4 +1,5 @@
 #include "timer_wheel.h"
+#include "constdefine.h"
 #include "Misc.h"
 #include "TimeUtils.h"
 #include "logger.h"
@@ -9,11 +10,6 @@
 
 namespace cncpp
 {
-    static const uint16_t MAX_TIMER_LEVEL = 5;
-    static const uint16_t TIMER_SLOT_SIZE = 10;
-    // 驱动方没有给出有效周期时的兜底值, 见 ADR-0001
-    static const uint64_t DEFAULT_TICK_MS = 50;
-
     namespace
     {
         // 整数快速幂, 取代 std::pow(slot_size_, level_): 后者返回 double, 赋给 uint64_t 会有精度隐患
@@ -228,12 +224,17 @@ namespace cncpp
                 continue;
 
             if (timer->getType() == TimerType::None)
+            {
+                // 不会重新入轮, 紧接着就被 timer_list.clear() 丢掉
+                TimerManager::getMe().retireTimer(timer->getTimerId());
                 continue;
+            }
 
             // 惰性取消: 命中就直接跳过, 既不执行也不重新入轮(见 ADR-0003)
             if (TimerManager::getMe().isCancelled(timer->getTimerId()))
             {
                 TimerManager::getMe().eraseCancelled(timer->getTimerId());
+                TimerManager::getMe().retireTimer(timer->getTimerId());
                 continue;
             }
 
@@ -242,7 +243,10 @@ namespace cncpp
             {
                 // 只剩下一次或者只执行一次的timer
                 if (timer->getRunCount() <= 1)
+                {
+                    TimerManager::getMe().retireTimer(timer->getTimerId());
                     continue;
+                }
 
                 timer->setRunCount(SAFE_SUB(timer->getRunCount(), 1));
             }
@@ -292,7 +296,7 @@ namespace cncpp
         uint64_t real_tick_ms = tick_ms;
         if (real_tick_ms == 0)
         {
-            real_tick_ms = DEFAULT_TICK_MS;
+            real_tick_ms = DEFAULT_MAIN_LOOP_INTERVAL_MS;
             LOG_WARN("[TimerManager][init] tick_ms is 0, fallback to {} ms", real_tick_ms);
         }
 
@@ -301,6 +305,7 @@ namespace cncpp
         temp_timers_.clear();
         longtime_timers_.clear();
         cancelled_.clear();
+        live_ids_.clear();
         timer_idx_   = 0;
         total_ticks_ = 0;
         {
@@ -411,7 +416,11 @@ namespace cncpp
         {
             if (op.is_cancel)
             {
-                cancelled_.insert(op.timer_id);
+                // 只对还活着的 id 记取消标记。已经执行完、或压根没注册过的 id 记进去
+                // 就再也没人来擦它 —— cancelled_ 只在定时器走到槽位那一刻才回收, 而这种
+                // id 永远不会再走到槽位。少了这道闸门, 每一次迟到的 cancel 都是一笔泄漏。
+                if (live_ids_.count(op.timer_id) > 0)
+                    cancelled_.insert(op.timer_id);
                 continue;
             }
 
@@ -426,6 +435,7 @@ namespace cncpp
             }
 
             addTimer(op.timer);
+            live_ids_.insert(timer_id);
         }
     }
 
@@ -437,6 +447,11 @@ namespace cncpp
     void TimerManager::eraseCancelled(const uint64_t timer_id)
     {
         cancelled_.erase(timer_id);
+    }
+
+    void TimerManager::retireTimer(const uint64_t timer_id)
+    {
+        live_ids_.erase(timer_id);
     }
 
     void TimerManager::addTimer(TimerPtr timer)

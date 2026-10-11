@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "config.h"
+#include "constdefine.h"
 #include "message_handler.h"
 
 namespace cncpp
@@ -19,7 +20,10 @@ namespace cncpp
             std::string                        owned_body;   // 压缩/加密的产物，无法共享
 
             // 本帧实际要写出的载荷：走了传输层变换就是自持的那份，否则是共享的那份
-            const std::string& payload() const { return shared_body ? *shared_body : owned_body; }
+            const std::string& payload() const
+            {
+                return shared_body ? *shared_body : owned_body;
+            }
         };
     }  // namespace
 
@@ -92,26 +96,13 @@ namespace cncpp
         boost::asio::post(executor_, std::move(fn));
     }
 
-    void Session::send(const std::string& body, uint32_t message_id)
+    std::shared_ptr<const std::string> Session::makeSharedRawPayload(uint32_t msg_index, const void* struct_bytes,
+                                                                     size_t size)
     {
-        send(body, message_id, PayloadFormat::kRaw);
-    }
-
-    void Session::send(const google::protobuf::Message& message, uint32_t message_id)
-    {
-        // 单播走这里仍然是"每个 Session 序列化一次"。广播别逐个调这个重载，
-        // 而是 makeSharedPayload() 序列化一次、把同一份 shared_ptr 发给所有人。
-        std::string serialized_message = ProtobufUtil::Serialize(message);
-        if (!serialized_message.empty())
-        {
-            send(std::make_shared<const std::string>(std::move(serialized_message)), message_id,
-                 PayloadFormat::kProtobuf);
-        }
-    }
-
-    std::shared_ptr<const std::string> Session::makeSharedPayload(const google::protobuf::Message& message)
-    {
-        return std::make_shared<const std::string>(ProtobufUtil::Serialize(message));
+        std::string body;
+        appendMsgIndex(body, msg_index);
+        body.append(static_cast<const char*>(struct_bytes), size);
+        return std::make_shared<const std::string>(std::move(body));
     }
 
     std::shared_ptr<const std::string> Session::makeSharedPayload(std::string body)
@@ -119,30 +110,29 @@ namespace cncpp
         return std::make_shared<const std::string>(std::move(body));
     }
 
-    void Session::send(std::shared_ptr<const std::string> body, uint32_t message_id)
+    void Session::sendRawStruct(uint32_t msg_index, const void* struct_bytes, size_t size)
     {
-        send(std::move(body), message_id, PayloadFormat::kRaw);
+        send(makeSharedRawPayload(msg_index, struct_bytes, size), PayloadFormat::kRawStruct);
     }
 
-    void Session::send(const std::string& body, uint32_t message_id, PayloadFormat format)
+    void Session::replyRawStruct(const NetworkMessage& request, const void* struct_bytes, size_t size)
     {
-        // 入队前必须有一份独立持有的字节块：调用方随时可能改/销毁 body
-        send(std::make_shared<const std::string>(body), message_id, format);
+        sendRawStruct(request.msgIndex(), struct_bytes, size);
     }
 
-    void Session::send(std::shared_ptr<const std::string> body, uint32_t message_id, PayloadFormat format)
+    void Session::send(std::shared_ptr<const std::string> body, PayloadFormat format)
     {
         if (!body)
         {
-            LOG_WARN("Session::send dropped null payload, message_id={}", message_id);
+            LOG_WARN("Session::send dropped null payload");
             return;
         }
 
         // 直接把共享块交出去，不复制：body 是 const 的，io 线程只读。
         // 到上限就弃载（ADR-0010）：内存恒定、连接存活，代价是这条下行消息丢了。
-        if (!send_queue_.tryPush(std::make_tuple(std::move(body), message_id, format)))
+        if (!send_queue_.tryPush(std::make_tuple(std::move(body), format)))
         {
-            if (++send_queue_full_drops_ % 1024 == 1)
+            if (++send_queue_full_drops_ % DROPS_PER_WARN_LOG == 1)
             {
                 LOG_WARN("Send queue full, dropped {} messages on this session", send_queue_full_drops_);
             }
@@ -291,9 +281,8 @@ namespace cncpp
 
             for (auto& frame : frames)
             {
-                std::shared_ptr<const std::string> body = std::move(std::get<0>(frame));
-                const auto                         msg_id = std::get<1>(frame);
-                const auto                         format = std::get<2>(frame);
+                std::shared_ptr<const std::string> body   = std::move(std::get<0>(frame));
+                const auto                         format = std::get<1>(frame);
 
                 if (!body)
                 {
@@ -305,7 +294,7 @@ namespace cncpp
                 // 变换产物只能由本帧自持（无法与别人共享），落到 owned_body；
                 // 没配压缩/加密时直接引用共享载荷 —— 广播给 N 个 Session 时，
                 // 这一帧的字节从头到尾只有一份，入队和编码都不再复制。
-                uint16_t flags = 0;
+                uint16_t     flags = 0;
                 EncodedFrame out;
                 if (compression_ || encryption_)
                 {
@@ -313,12 +302,12 @@ namespace cncpp
                     if (compression_)
                     {
                         transformed = compression_->Compress(transformed);
-                        flags      = static_cast<uint16_t>(flags | kFlagCompressed);
+                        flags       = static_cast<uint16_t>(flags | kFlagCompressed);
                     }
                     if (encryption_)
                     {
                         transformed = encryption_->Encrypt(transformed);
-                        flags      = static_cast<uint16_t>(flags | kFlagEncrypted);
+                        flags       = static_cast<uint16_t>(flags | kFlagEncrypted);
                     }
                     out.owned_body = std::move(transformed);
                 }
@@ -330,8 +319,7 @@ namespace cncpp
                 const std::string& payload = out.payload();
                 if (payload.size() > kMaxBodyLength)
                 {
-                    LOG_ERROR("Dropping outgoing message_id={}: body {} exceeds limit {}", msg_id, payload.size(),
-                              kMaxBodyLength);
+                    LOG_ERROR("Dropping outgoing frame: body {} exceeds limit {}", payload.size(), kMaxBodyLength);
                     continue;
                 }
 
@@ -340,7 +328,6 @@ namespace cncpp
                 header.format_      = format;
                 header.flags_       = flags;
                 header.body_length_ = static_cast<uint32_t>(payload.size());
-                header.message_id_  = msg_id;
 
                 out.header.resize(kHeaderSize);
                 encodeHeader(header, out.header.data());
@@ -494,7 +481,7 @@ namespace cncpp
 
         // 投递到接收队列。到上限时丢弃，这是弃载而不是背压（见 CONTEXT.md）：
         // io 线程从不为队列减速，直接把新帧扔掉。tick 这一拍没跟上，让 io 线程
-        // 等它只会把慢扩散到所有连接上。每 1024 条才报一次警，否则持续过载会
+        // 等它只会把慢扩散到所有连接上。每 DROPS_PER_WARN_LOG 条才报一次警，否则持续过载会
         // 先于真正的问题把 io 线程淹死在日志里。
         auto enqueue = [this](NetworkMessage&& message) {
             if (receive_queue_.tryPush(std::move(message)))
@@ -502,41 +489,93 @@ namespace cncpp
                 return;
             }
 
-            if (++queue_full_drops_ % 1024 == 1)
+            if (++queue_full_drops_ % DROPS_PER_WARN_LOG == 1)
             {
                 LOG_WARN("Receive queue full, dropped {} messages on this session", queue_full_drops_);
             }
         };
 
-        if (header.format_ == PayloadFormat::kRaw)
+        // 认得格式却解不开：丢弃这一帧、连接保持，连续超阈值才关（ADR-0009）。
+        // 帧是长度前缀的，丢弃不会让流失同步，所以这里是策略选择而非正确性要求。
+        auto decodeFailure = [this](const std::string& what) {
+            ++consecutive_decode_failures_;
+            LOG_ERROR("{} ({} consecutive), dropping frame", what, consecutive_decode_failures_);
+            return consecutive_decode_failures_ < kMaxConsecutiveDecodeFailures;
+        };
+
+        switch (header.format_)
         {
-            enqueue(NetworkMessage::createTextMessage(header, std::move(body), remote_endpoint_));
-            return true;
-        }
-        else if (header.format_ == PayloadFormat::kProtobuf)
-        {
-            auto proto_message = MessageHandlerRegistry::instance().createMessage(header.message_id_);
-            if (!proto_message)
-            {
-                // 服务端不认得这个 id：丢弃这一帧，连接保持。这是服务端缺注册，
-                // 不是客户端发了坏包，因此不计入错误预算（ADR-0007）。
-                LOG_WARN("No handler registered for message_id={}, dropping frame", header.message_id_);
+            case PayloadFormat::kRawStruct: {
+                uint32_t msg_index = 0;
+                if (!readMsgIndex(body, msg_index))
+                {
+                    return decodeFailure("Raw frame too short to hold a msgindex");
+                }
+
+                const RawStructMeta* meta = RawStructRegistry::instance().find(msg_index);
+                if (!meta)
+                {
+                    // 服务端不认得这个 msgindex：丢弃这一帧，连接保持。这是服务端
+                    // 缺注册，不是客户端发了坏包，因此不计入错误预算
+                    // （ADR-0007 的结论在 v2 里平移到了类型标识上）。
+                    LOG_WARN("No raw struct registered for msgindex={}, dropping frame", msg_index);
+                    return true;
+                }
+
+                // 长度校验在这里做，是 ADR-0005 "io 线程上的解码必须是有界的"
+                // 在裸结构体帧上的落地：畸形帧不进业务层。
+                if (body.size() != kRawIndexSize + meta->size)
+                {
+                    return decodeFailure("Raw struct '" + meta->name + "' size mismatch: got "
+                                         + std::to_string(body.size()) + ", expected "
+                                         + std::to_string(kRawIndexSize + meta->size));
+                }
+
+                consecutive_decode_failures_ = 0;
+                enqueue(
+                    NetworkMessage::createRawMessage(header, msg_index, meta->name, std::move(body), remote_endpoint_));
                 return true;
             }
 
-            if (!ProtobufUtil::Deserialize(body, *proto_message))
-            {
-                // 认得 id 却解不开：丢弃这一帧、连接保持，连续超阈值才关（ADR-0009）。
-                // 帧是长度前缀的，丢弃不会让流失同步，所以这里是策略选择而非正确性要求。
-                ++consecutive_decode_failures_;
-                LOG_ERROR("Failed to decode message_id={} ({} consecutive), dropping frame", header.message_id_,
-                          consecutive_decode_failures_);
-                return consecutive_decode_failures_ < kMaxConsecutiveDecodeFailures;
+            case PayloadFormat::kProtobuf: {
+                std::string msg_name;
+                size_t      payload_offset = 0;
+                if (!readMsgName(body, msg_name, payload_offset))
+                {
+                    // 前 kMaxMsgNameLength+1 字节里没有 '\0'：名字过长或 body 太短。
+                    // 绝不截断——"cncpp.LoginRequest" 截断成 "cncpp.Login" 会静默
+                    // 命中另一个真实存在的类型（ADR-0011）。
+                    return decodeFailure("Protobuf frame has an invalid msgname field");
+                }
+
+                auto proto_message = ProtobufTypeRegistry::instance().create(msg_name);
+                if (!proto_message)
+                {
+                    // 名字在 DescriptorPool 里查不到：丢弃、连接保持，不计入错误
+                    // 预算（与上面 msgindex 未注册同一条理由）。
+                    LOG_WARN("No protobuf type registered for msgname='{}', dropping frame", msg_name);
+                    return true;
+                }
+
+                // msgname 字段的宽度由 '\0' 的位置决定，不再是编译期常量，
+                // 所以必须用 readMsgName 回传的偏移切载荷，不能写死任何数字。
+                if (!ProtobufUtil::Deserialize(body.substr(payload_offset), *proto_message))
+                {
+                    return decodeFailure("Failed to decode protobuf msg '" + msg_name + "'");
+                }
+
+                consecutive_decode_failures_ = 0;
+                enqueue(NetworkMessage::createProtobufMessage(
+                    header, std::move(msg_name), std::shared_ptr<google::protobuf::Message>(std::move(proto_message)),
+                    remote_endpoint_));
+                return true;
             }
 
-            consecutive_decode_failures_ = 0;
-            enqueue(NetworkMessage::createProtobufMessage(header, std::move(proto_message), remote_endpoint_));
-            return true;
+            case PayloadFormat::kFlatBuffers:
+                // 帧头承认它是合法格式，但解码器未实现（ADR-0011）。丢弃该帧并
+                // 计错误预算：客户端发的每一条 flatbuffers 帧服务端都处理不了，
+                // 连发下去说明两端没对齐，和"版本漂移"是同一类情况。
+                return decodeFailure("FlatBuffers payload format is not implemented yet");
         }
 
         // decodeHeader() 已经把非法 format 挡在前面（kBadFormat 会让连接直接关掉），

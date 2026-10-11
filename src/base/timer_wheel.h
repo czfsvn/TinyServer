@@ -110,7 +110,7 @@ namespace cncpp
         TimerManager();
         ~TimerManager();
 
-        // tick_ms: 一个刻度代表的毫秒数, 传 0 则回退到 DEFAULT_TICK_MS
+        // tick_ms: 一个刻度代表的毫秒数, 传 0 则回退到 DEFAULT_MAIN_LOOP_INTERVAL_MS
         void init(const uint64_t tick_ms);
 
         uint64_t generateTimerIdx();
@@ -142,6 +142,11 @@ namespace cncpp
         bool isCancelled(const uint64_t timer_id) const;
         void eraseCancelled(const uint64_t timer_id);
 
+        // 同上, 仅供 tick 线程调用: 该定时器已不再存在于轮中(执行完毕 / 被取消命中),
+        // 从 live_ids_ 摘掉。这是惰性取消(ADR-0003)的配套簿记 —— 少调一次 live_ids_
+        // 就会漏, 等于把 cancelled_ 的无界增长换个地方重犯一遍。
+        void retireTimer(const uint64_t timer_id);
+
     private:
         // 入站操作: 注册与取消都走这条队列, 由 tick 线程在 applyPendingOps() 里消费
         struct PendingOp
@@ -164,7 +169,10 @@ namespace cncpp
         // 超长期定时器(一时半会不会得到执行)
         std::list<TimerPtr> longtime_timers_ = {};
 
-        uint64_t timer_idx_ = 0;
+        // 注册入口(runAt/runEvery/runForever)可能在任意业务线程被调用(见 ADR-0002),
+        // 而 id 是在入队之前就分配的, 不在 pending_mutex_ 的保护范围内 —— 必须是原子的。
+        // 否则并发注册会发出重复 id, cancel() 就会打到不相干的那个定时器上。
+        std::atomic<uint64_t> timer_idx_{0};
 
         // 已走过的基础刻度总数(level-1 的 tick 次数), 恒等于 wheels_map_[1]->getCurSlot() 所在的圈数累计
         uint64_t total_ticks_ = 0;
@@ -175,6 +183,13 @@ namespace cncpp
 
         // 已取消、但尚未走到其槽位的定时器 id, 仅 tick 线程访问
         std::unordered_set<uint64_t> cancelled_ = {};
+
+        // 仍在轮中(或停在 longtime_timers_ 里等着)的定时器 id, 仅 tick 线程访问。
+        //
+        // 存在的意义: cancel 一个"已经执行完"或"压根没注册过"的 id 时, 不要往
+        // cancelled_ 里记一笔 —— 那笔永远等不到"走到槽位被擦掉"的那一天(定时器早
+        // 就不在轮里了), 于是随每一次迟到的 cancel 无界增长。
+        std::unordered_set<uint64_t> live_ids_ = {};
 
         // 停止标志
         std::atomic<bool> running_{false};

@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include "network.h"
 
 namespace cncpp
@@ -145,6 +146,23 @@ namespace cncpp
         bool sendMessage(const NetworkMessage& message);
 
         /**
+     * @brief 发送裸结构体：索引由调用方给，必须是 RAW_STRUCT 注册过的那个
+     *
+     * 刻意不绕 NetworkMessage：那还要一个 type_name，而索引对应的名字是注册方
+     * 定的，发送侧现编一个就成了两处真相。这里直接把字节交给 Session。
+     *
+     * 长度与对齐在这里卡死：服务端 io 线程按 kRawIndexSize + sizeof(T) 校验
+     * body，多一个字节就是畸形帧（ADR-0009）。
+     */
+        template <class T>
+        bool sendMessage(uint32_t msg_index, const T& value)
+        {
+            static_assert(std::is_trivially_copyable<T>::value, "裸结构体必须是 trivially copyable 的 POD");
+            static_assert(alignof(T) == 1, "裸结构体必须 1 字节对齐：alignof(T) == 1 即 pack(1) 的证明");
+            return sendRawStructFrame(msg_index, &value, sizeof(T));
+        }
+
+        /**
      * @brief 判断是否活跃
      * @return 是否活跃
      */
@@ -204,6 +222,12 @@ namespace cncpp
         std::chrono::steady_clock::time_point last_active_time_;  // 最后活跃时间
 
     private:
+        /**
+     * @brief 裸结构体的实际发送（模板 sendMessage 的落地处，放在 .cpp 里是为了不把
+     *        日志与会话细节铺进头文件）
+     */
+        bool sendRawStructFrame(uint32_t msg_index, const void* struct_bytes, size_t size);
+
         /**
      * @brief 内部消息处理
      */

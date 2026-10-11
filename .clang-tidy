@@ -1,0 +1,72 @@
+---
+# 命名规范落地：规则说明见 CODE_STYLE.md 第 1 章（Google 风格）
+# 用法：clang-tidy -p build src/xxx.cpp
+# 批量修复：clang-tidy -p build --fix src/xxx.cpp
+Checks:          '-*,readability-identifier-naming'
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/.*'
+FormatStyle:     file
+CheckOptions:
+  # ------------------------------------------------ 类型：驼峰，首字母大写
+  - key:   readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key:   readability-identifier-naming.StructCase
+    value: CamelCase
+  - key:   readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key:   readability-identifier-naming.UnionCase
+    value: CamelCase
+  - key:   readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key:   readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+
+  # ---------------------------------------------------- 命名空间：小写下划线
+  - key:   readability-identifier-naming.NamespaceCase
+    value: lower_case
+
+  # --------------------------------------- 函数 / 方法 / 参数 / 变量：小驼峰
+  - key:   readability-identifier-naming.FunctionCase
+    value: camelBack
+  - key:   readability-identifier-naming.MethodCase
+    value: camelBack
+  - key:   readability-identifier-naming.ParameterCase
+    value: camelBack
+  - key:   readability-identifier-naming.VariableCase
+    value: camelBack
+
+  # --------------------------------------------- 成员变量：小驼峰 + 后缀 _
+  - key:   readability-identifier-naming.ClassMemberCase
+    value: camelBack
+  - key:   readability-identifier-naming.ClassMemberSuffix
+    value: '_'
+
+  # ------------------------------------------------ 常量与枚举值：k + 驼峰
+  - key:   readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.ConstantPrefix
+    value: k
+  - key:   readability-identifier-naming.ConstexprVariableCase
+    value: CamelCase
+  - key:   readability-identifier-naming.ConstexprVariablePrefix
+    value: k
+  - key:   readability-identifier-naming.ClassConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.ClassConstantPrefix
+    value: k
+  - key:   readability-identifier-naming.GlobalConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.GlobalConstantPrefix
+    value: k
+  - key:   readability-identifier-naming.StaticConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.StaticConstantPrefix
+    value: k
+  - key:   readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key:   readability-identifier-naming.EnumConstantPrefix
+    value: k
+
+  # ---------------------------------------------- 宏：全大写下划线（仅宏）
+  - key:   readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE

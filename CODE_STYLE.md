@@ -20,10 +20,26 @@
 - **示例**：`namespace cncpp`、`namespace network_lib`
 
 ### 1.5 常量命名
-- **常量**：使用全大写，多个单词用下划线连接
-- **示例**：`const int MAX_BUFFER_SIZE = 1024`
+- **常量**（`const` / `constexpr` / 类内静态常量）：`k` 前缀 + 驼峰命名法，首字母大写
+- **示例**：`constexpr int kMaxBufferSize = 1024`、`const int kDefaultPort = 8080`
+- **宏**：全大写，多个单词用下划线连接；该风格**只用于宏**，且应优先用常量替代宏
+- **示例**：`#define LOG_BUFFER_SIZE 4096`
+
+### 1.6 枚举命名
+- **枚举类型名**：与类名一致（驼峰，首字母大写），优先使用 `enum class`
+- **枚举值**：与常量一致（`k` 前缀 + 驼峰）
+- **示例**：
+  ```cpp
+  enum class PayloadFormat
+  {
+      kRawStruct,
+      kProtobuf,
+  };
+  ```
 
 ## 2. 代码风格
+
+基线为 **Google 风格**（`.clang-format` 中 `BasedOnStyle: Google`），本章列出的是项目在 Google 之上的定制项；未在 `.clang-format` 中声明的选项一律遵循 Google 默认值。
 
 ### 2.1 缩进
 - **缩进宽度**：4 个空格
@@ -60,6 +76,12 @@
 ### 2.5 指针和引用
 - **风格**：指针/引用符号紧贴类型
 - **示例**：`std::string* ptr`、`const std::string& ref`
+
+### 2.6 其他约定
+- **对齐**：连续赋值、连续声明按列对齐（`AlignConsecutive*`）
+- **短代码块**：禁止函数/if/循环/lambda/代码块合并到一行
+- **include**：不重排分组（`IncludeBlocks: Preserve`），仅组内排序
+- **命名空间**：namespace 内部代码整体缩进（`NamespaceIndentation: All`）
 
 ## 3. 注释规范
 
@@ -158,19 +180,29 @@
 ## 6. 工具使用
 
 ### 6.1 代码格式化
-- **工具**：clang-format
-- **配置文件**：`.clang-format`
+- **工具**：clang-format（已验证版本 18）
+- **配置文件**：`.clang-format`，基线 `BasedOnStyle: Google` + 项目定制（4 空格缩进、Allman 大括号、120 列、`Standard: c++17`）
 - **使用方法**：
   ```bash
   clang-format -i file.cpp
   ```
+- **全量格式化**：
+  ```bash
+  clang-format -i src/**/*.cpp src/**/*.h
+  ```
 
 ### 6.2 静态分析
-- **工具**：clang-tidy
+- **工具**：clang-tidy（已验证版本 18）
+- **配置文件**：`.clang-tidy`，当前启用 `readability-identifier-naming` 落地第 1 章的命名规则
 - **使用方法**：
   ```bash
-  clang-tidy file.cpp
+  clang-tidy -p build src/xxx.cpp
   ```
+- **存量代码迁移**：命名规则变更（`MAX_BUFFER_SIZE` → `kMaxBufferSize`、`SUCCESS` → `kSuccess`、`Idle` → `kIdle`）会命中大量历史代码，建议按模块用 `--fix` 批量重命名：
+  ```bash
+  clang-tidy -p build --fix src/base/xxx.cpp
+  ```
+  无法自动修复的位置用 `// NOLINT(readability-identifier-naming)` 标记，新代码一律直接按新规则编写
 
 ### 6.3 代码审查
 - **流程**：代码提交前进行代码审查

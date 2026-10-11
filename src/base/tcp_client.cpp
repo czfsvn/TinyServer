@@ -131,6 +131,30 @@ namespace cncpp
         }
     }
 
+    bool TcpClient::sendRawStructFrame(uint32_t msg_index, const void* struct_bytes, size_t size)
+    {
+        if (!isConnected())
+        {
+            LOG_ERROR("TcpClient not connected to server");
+            return false;
+        }
+
+        try
+        {
+            // 与上面两个 sendMessage 不同，这一条是真发出去了：session_ 在
+            // handleConnectSuccess 里就建好了，不需要等那个 todo。
+            // 前缀（msgindex 的字节序与宽度）由 Session::sendRawStruct 拼。
+            session_->sendRawStruct(msg_index, struct_bytes, size);
+            LOG_DEBUG("TcpClient sent raw struct, msg_index: {}", msg_index);
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            LOG_ERROR("Failed to send message to server: {}", e.what());
+            return false;
+        }
+    }
+
     void TcpClient::disconnect()
     {
         ConnectionState current = connection_state_.exchange(ConnectionState::Disconnected);

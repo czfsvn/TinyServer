@@ -4,8 +4,10 @@
 #include <boost/asio.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
+#include <type_traits>
 
 #include "message_data.h"
 
@@ -15,26 +17,52 @@ namespace cncpp
 {
     // ======== 帧头（术语见 CONTEXT.md 的「帧」）========
     //
-    // 线上布局，定长 16 字节，全部网络字节序（大端）：
-    //   magic(4) | version(1) | format(1) | flags(2) | body_length(4) | message_id(4)
+    // v2 线上布局，定长 12 字节，全部网络字节序（大端）：
+    //   magic(4) | version(1) | format(1) | flags(2) | body_length(4)
+    //
+    // v1 末尾那个 message_id(4) 在 v2 里被删掉了：目标类型不再由帧头给出，
+    // 改由 body 自带的类型标识给出（裸结构体帧的 msgindex、protobuf 帧的 msgname）。
+    // 见 ADR-0011 与 CONTEXT.md 的「类型标识」。
     //
     // 内存里的 MessageHeader **不是**这个布局：它是主机字节序的普通结构体，
     // 只能通过 encodeHeader / decodeHeader 与字节流互转。
     // 不要对它 memcpy —— 那会把字节序和对齐假设重新引进来。
 
     constexpr uint32_t kMessageMagic   = 0x12345678;
-    constexpr uint8_t  kMessageVersion = 1;
-    constexpr size_t   kHeaderSize     = 16;
+    constexpr uint8_t  kMessageVersion = 2;
+    constexpr size_t   kHeaderSize     = 12;
 
     // 单帧 body 的上限。必须在按 body_length_ 分配内存之前校验，
     // 否则一个伪造的头部就能让服务端分配 4GB。
     constexpr uint32_t kMaxBodyLength = 1024 * 1024;
 
+    // ======== 类型标识（body 前缀，术语见 CONTEXT.md）========
+    //
+    // 它们是**协议字段**，与帧头同一套字节序规则（大端），不是载荷的一部分。
+    // 类型标识是解码的输入；分发（交给哪个 handler）用的是消息名字——两者不是
+    // 一回事，见 CONTEXT.md。
+
+    constexpr size_t kRawIndexSize = 4;  // msgindex：body 前 4 字节，大端 uint32
+
+    // msgname 的线上形态：body 开头的一个 **C 字符串** —— [名字字节…]['\0']，
+    // 终止符之后才是 protobuf 载荷。
+    //
+    // 为什么不是定长 64 字节：protobuf 走的是高频路径，一个 20 字节的消息却要
+    // 陪 64 字节的名字，是纯浪费（1000 连接 × 20 帧/秒 × 45 字节 ≈ 每秒 0.9 MB
+    // 的纯填充）。
+    //
+    // 变长就必须还能**有界地**解析，所以这个常量有两重身份：既是名字长度上限，
+    // 也是接收端的扫描上界 —— 前 kMaxMsgNameLength + 1 字节里找不到 '\0' 就是
+    // 名字超长，丢弃而非截断（截断会让 cncpp.LoginRequest 变成 cncpp.Login 并
+    // 静默解成另一个真实存在的类型）。
+    constexpr size_t kMaxMsgNameLength = 63;
+
     // 载荷格式：body 里装的是什么。互斥取值，不是位标志（ADR-0006）。
     enum class PayloadFormat : uint8_t
     {
-        kRaw      = 0,  // 不透明字节，不做解码
-        kProtobuf = 1,  // 某个已注册 protobuf 类型的序列化结果
+        kRawStruct   = 0,  // msgindex(4,大端) + 1 字节对齐的裸结构体
+        kProtobuf    = 1,  // msgname(C 字符串) + 某个 protobuf 类型的序列化结果
+        kFlatBuffers = 2,  // 只占枚举位，解码器未实现（ADR-0011）
     };
 
     // 传输层变换标志，与 format 正交：加密与压缩作用在字节层面，
@@ -49,10 +77,9 @@ namespace cncpp
     {
         uint32_t      magic_       = kMessageMagic;
         uint8_t       version_     = kMessageVersion;
-        PayloadFormat format_      = PayloadFormat::kRaw;
+        PayloadFormat format_      = PayloadFormat::kRawStruct;
         uint16_t      flags_       = 0;
         uint32_t      body_length_ = 0;
-        uint32_t      message_id_  = 0;
     };
 
     // 帧头解码与校验的结果。
@@ -64,6 +91,18 @@ namespace cncpp
         kBadFormat,
         kBodyTooLarge,
     };
+
+    // 裸结构体的字段字节序是**主机序（小端）**，不做转换——这是"强转"能成立的前提
+    // （ADR-0011）。x86 与 ARM 都是小端。把它钉成编译期常量，将来真上大端机器时
+    // 是编译失败，而不是运行期读到错值。
+    inline constexpr bool kHostIsLittleEndian =
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+        (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__);
+#elif defined(_MSC_VER)
+        true;  // MSVC 只跑在 x86 / ARM 上，恒为小端
+#else
+#error "无法在编译期判定主机字节序，裸结构体的主机序假设无法保证"
+#endif
 
     inline const char* toString(HeaderError err)
     {
@@ -115,7 +154,6 @@ namespace cncpp
         p[5] = static_cast<unsigned char>(header.format_);
         detail::storeBe16(p + 6, header.flags_);
         detail::storeBe32(p + 8, header.body_length_);
-        detail::storeBe32(p + 12, header.message_id_);
     }
 
     // 从 kHeaderSize 字节的缓冲区读出帧头并校验。
@@ -138,8 +176,9 @@ namespace cncpp
         }
 
         const uint8_t format = p[5];
-        if (format != static_cast<uint8_t>(PayloadFormat::kRaw)
-            && format != static_cast<uint8_t>(PayloadFormat::kProtobuf))
+        // kFlatBuffers 也是合法值（解码器未实现，但帧头必须承认它，否则客户端
+        // 连"这个格式服务端认得、只是暂不支持"和"协议不匹配"都分不清）。
+        if (format > static_cast<uint8_t>(PayloadFormat::kFlatBuffers))
         {
             return HeaderError::kBadFormat;
         }
@@ -155,8 +194,86 @@ namespace cncpp
         out.format_      = static_cast<PayloadFormat>(format);
         out.flags_       = detail::loadBe16(p + 6);
         out.body_length_ = body_length;
-        out.message_id_  = detail::loadBe32(p + 12);
         return HeaderError::kOk;
+    }
+
+    // ======== 类型标识的编解码 ========
+    //
+    // 只负责 body 前缀那几个字节。失败一律返回 false，怎么处置由调用方按
+    // ADR-0009（认得格式但解不开 → 丢弃 + 错误预算）决定。
+
+    inline void appendMsgIndex(std::string& out, uint32_t msg_index)
+    {
+        unsigned char buf[kRawIndexSize];
+        detail::storeBe32(buf, msg_index);
+        out.append(reinterpret_cast<const char*>(buf), kRawIndexSize);
+    }
+
+    // 拼出裸结构体帧的完整 body：msgindex(4,大端) + 结构体字节。
+    //
+    // 调用方不该自己写 appendMsgIndex + reinterpret_cast 两连：前缀宽度与字节序
+    // 是协议，漏一步就是畸形帧，而服务端在 io 线程按 ADR-0009 直接丢弃并计错误
+    // 预算。收成一个函数之后，这两件事只有一处知道。
+    template <class T>
+    std::string makeRawBody(uint32_t msg_index, const T& value)
+    {
+        static_assert(std::is_trivially_copyable<T>::value, "裸结构体必须是 trivially copyable 的 POD");
+        static_assert(alignof(T) == 1, "裸结构体必须 1 字节对齐：alignof(T) == 1 就是 pack(1) 的编译期证明");
+
+        std::string body;
+        appendMsgIndex(body, msg_index);
+        body.append(reinterpret_cast<const char*>(&value), sizeof(T));
+        return body;
+    }
+
+    inline bool readMsgIndex(const std::string& body, uint32_t& out)
+    {
+        if (body.size() < kRawIndexSize)
+        {
+            return false;
+        }
+        out = detail::loadBe32(reinterpret_cast<const unsigned char*>(body.data()));
+        return true;
+    }
+
+    inline bool appendMsgName(std::string& out, const std::string& msg_name)
+    {
+        if (msg_name.empty() || msg_name.size() > kMaxMsgNameLength)
+        {
+            return false;
+        }
+        out.append(msg_name);
+        out.push_back('\0');
+        return true;
+    }
+
+    // 读出 msgname 并告诉调用方**载荷从哪里开始**。
+    //
+    // payload_offset 必须回传，不能让调用方自己算 name.size() + 1：'\0' 是消失
+    // 在线上格式里的一个字节，凡是需要它的人都漏得掉。
+    //
+    // 失败一律返回 false，怎么处置由调用方按 ADR-0009 决定。
+    inline bool readMsgName(const std::string& body, std::string& out, size_t& payload_offset)
+    {
+        // 扫描必须有界。body 最坏有 kMaxBodyLength(1MB)，而这跑在 io 线程上、
+        // 每帧一次；名字超长时前半段本来就没有 '\0'，不设上界就是一条畸形帧
+        // 让 io 线程线性扫 1MB —— 正是 ADR-0005 说的"解码必须有界"。
+        const size_t scan_size  = body.size() < kMaxMsgNameLength + 1 ? body.size() : kMaxMsgNameLength + 1;
+        const void*  terminator = std::memchr(body.data(), '\0', scan_size);
+        if (!terminator)
+        {
+            return false;  // 名字超长（或压根没有终止符），丢弃而非截断
+        }
+
+        const size_t name_length = static_cast<const char*>(terminator) - body.data();
+        if (name_length == 0)
+        {
+            return false;  // 空名字，与 appendMsgName 拒绝空的规则对称
+        }
+
+        out.assign(body.data(), name_length);
+        payload_offset = name_length + 1;  // 终止符那一个字节也算在名字字段里
+        return true;
     }
 
     struct NetworkMessage
@@ -214,9 +331,61 @@ namespace cncpp
             return *this;
         }
 
+        // 载荷格式。**帧头的 format_ 是唯一真相**（ADR-0011）：data_ 不自报格式，
+        // 业务侧先问这个再决定取用方式。
+        PayloadFormat format() const
+        {
+            return header_.format_;
+        }
+
+        // 解码得出的消息名字：**业务分发的键**。protobuf 帧就是它的 msgname，
+        // 裸结构体帧由注册表从 msgindex 反查而来。它与类型标识不是一回事
+        // （见 CONTEXT.md）。
+        std::string messageName() const
+        {
+            return data_ ? data_->typeName() : std::string();
+        }
+
+        // 裸结构体帧的 msgindex。非裸结构体帧返回 0。
+        uint32_t msgIndex() const
+        {
+            return data_ ? data_->typeIndex() : 0;
+        }
+
+        // 完整 body 字节（含类型标识前缀）。裸结构体帧要读结构体请用 as<T>()。
         const std::string* getBody() const
         {
             return data_ ? data_->getBody() : nullptr;
+        }
+
+        /**
+         * @brief 把裸结构体的字节直接解释成 T 的视图（零拷贝强转）
+         *
+         * 三重校验，缺一不可：
+         *   1. 编译期：T 必须 trivially copyable；
+         *   2. 编译期：alignof(T) == 1 —— 这就是"确实写了 pack(1)"的证明，
+         *      忘写 pragma 的结构体在这里编译失败，不用靠人肉检查；
+         *   3. 运行期：body 长度必须正好等于 kRawIndexSize + sizeof(T)。
+         *
+         * 返回的指针只在 IMessageData 存活期内有效，不要存下来。
+         */
+        template <class T>
+        const T* as() const
+        {
+            static_assert(std::is_trivially_copyable<T>::value, "裸结构体必须是 trivially copyable 的 POD");
+            static_assert(alignof(T) == 1, "裸结构体必须 1 字节对齐：alignof(T) == 1 就是 pack(1) 的编译期证明");
+            static_assert(kHostIsLittleEndian, "裸结构体字段是主机序小端，大端平台上必须逐字段转换（ADR-0011）");
+
+            const std::string* body = getBody();
+            if (!body || header_.format_ != PayloadFormat::kRawStruct)
+            {
+                return nullptr;
+            }
+            if (body->size() != kRawIndexSize + sizeof(T))
+            {
+                return nullptr;
+            }
+            return reinterpret_cast<const T*>(body->data() + kRawIndexSize);
         }
 
         const google::protobuf::Message* getProtobuf() const
@@ -227,11 +396,6 @@ namespace cncpp
         google::protobuf::Message* getMutableProtobuf()
         {
             return data_ ? data_->getMutableProtobuf() : nullptr;
-        }
-
-        bool isProtobuf() const
-        {
-            return data_ && data_->isProtobuf();
         }
 
         size_t memorySize() const
@@ -249,30 +413,43 @@ namespace cncpp
             return data_ ? data_->serialize() : std::string();
         }
 
-        void setBody(std::string body)
+        // 裸结构体：body 必须已经是 "msgindex(4) + 结构体字节" 的完整形态。
+        // 前缀不在这里拼——拼填充与字节序是 Session 发送路径的事（ADR-0011）。
+        void setRaw(uint32_t msg_index, std::string type_name, std::string body)
         {
-            data_ = cncpp::createTextMessage(std::move(body));
+            header_.format_ = PayloadFormat::kRawStruct;
+            data_           = cncpp::createRawStructMessage(msg_index, std::move(type_name), std::move(body));
         }
 
-        void setProtobuf(std::shared_ptr<google::protobuf::Message> proto)
+        // 直接给结构体对象的便利重载：前缀在这里拼一次，调用方不碰编码规则。
+        template <class T>
+        void setRaw(uint32_t msg_index, std::string type_name, const T& value)
         {
-            data_ = cncpp::createProtobufMessage(std::move(proto));
+            // 前缀与字节序交给 makeRawBody，那份 static_assert 也在那里
+            setRaw(msg_index, std::move(type_name), makeRawBody(msg_index, value));
         }
 
-        static NetworkMessage createTextMessage(const MessageHeader& header, std::string body,
-                                                const tcp::endpoint& sender)
+        void setProtobuf(std::string msg_name, std::shared_ptr<google::protobuf::Message> proto)
+        {
+            header_.format_ = PayloadFormat::kProtobuf;
+            data_           = cncpp::createProtobufMessage(std::move(msg_name), std::move(proto));
+        }
+
+        static NetworkMessage createRawMessage(const MessageHeader& header, uint32_t msg_index, std::string type_name,
+                                              std::string body, const tcp::endpoint& sender)
         {
             NetworkMessage msg(header, sender);
-            msg.setBody(std::move(body));
+            msg.setRaw(msg_index, std::move(type_name), std::move(body));
             return msg;
         }
 
         static NetworkMessage createProtobufMessage(const MessageHeader&                       header,
+                                                    std::string                                msg_name,
                                                     std::shared_ptr<google::protobuf::Message> proto,
                                                     const tcp::endpoint&                       sender)
         {
             NetworkMessage msg(header, sender);
-            msg.setProtobuf(std::move(proto));
+            msg.setProtobuf(std::move(msg_name), std::move(proto));
             return msg;
         }
 
@@ -284,13 +461,7 @@ namespace cncpp
          */
         std::string getTypeName() const
         {
-            const auto* proto = getProtobuf();
-            if (!proto)
-            {
-                return {};
-            }
-
-            return proto->GetDescriptor()->full_name();
+            return messageName();
         }
 
         /**

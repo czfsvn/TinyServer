@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include "network.h"
 
 namespace cncpp
@@ -87,6 +88,20 @@ namespace cncpp
      * @return 是否发送成功
      */
         bool sendMessage(const std::string& message);
+
+        /**
+     * @brief 发送裸结构体：索引由调用方给，必须是 RAW_STRUCT 注册过的那个
+     *
+     * 与 TcpTask 上那个同名重载是同一份约定（见那里的注释）：不绕 NetworkMessage，
+     * 直接把字节交给 Session，省掉一个发送侧不该现编的 type_name。
+     */
+        template <class T>
+        bool sendMessage(uint32_t msg_index, const T& value)
+        {
+            static_assert(std::is_trivially_copyable<T>::value, "裸结构体必须是 trivially copyable 的 POD");
+            static_assert(alignof(T) == 1, "裸结构体必须 1 字节对齐：alignof(T) == 1 即 pack(1) 的证明");
+            return sendRawStructFrame(msg_index, &value, sizeof(T));
+        }
 
         /**
      * @brief 断开连接
@@ -185,6 +200,11 @@ namespace cncpp
      * @brief 内部消息接收处理
      */
         void handleMessage(const cncpp::NetworkMessage& message);
+
+        /**
+     * @brief 裸结构体的实际发送（模板 sendMessage 的落地处）
+     */
+        bool sendRawStructFrame(uint32_t msg_index, const void* struct_bytes, size_t size);
 
     protected:
         std::string                host_;       // 服务器地址

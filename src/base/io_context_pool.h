@@ -12,6 +12,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include "constdefine.h"
 #include "network.h"
 #include "singleton.h"
 
@@ -31,10 +32,6 @@ namespace cncpp
         friend class Singleton<IOContextPool>;
 
     public:
-        // 默认主循环间隔（毫秒）：配置没设或读出来是 0 时用这个值兜底。
-        // 成员初值与 init() 的回退逻辑共用它，避免 10 散落两处、改一处漏一处。
-        static constexpr uint32_t kDefaultIntervalMs = 10;
-
         // 初始化池（必须在程序开始时调用）
         bool init();
 
@@ -172,7 +169,11 @@ namespace cncpp
         std::atomic<bool>             initialized_{false};
 
         // 主 IO 上下文，用于定时器等特殊任务
-        std::atomic<uint32_t>                      interval_ms_{kDefaultIntervalMs};
+        //
+        // 初值取 DEFAULT_MAIN_LOOP_INTERVAL_MS（constdefine.h）：配置没设、或读出来
+        // 是 0 时都回退到它。它同时是时间轮一格的兜底值 —— 同一个概念只留一个常量，
+        // 见 ADR-0001。
+        std::atomic<uint32_t>                      interval_ms_{DEFAULT_MAIN_LOOP_INTERVAL_MS};
         std::atomic<bool>                          has_explicit_interval_{false};
         // timer_callback_ 由 timer_mutex_ 保护：可能在任意线程被替换，在 main io_context 线程被调用
         std::mutex                                 timer_mutex_;

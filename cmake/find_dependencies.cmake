@@ -24,6 +24,19 @@ To install Boost on Linux:
 endif()
 
 # ============================================
+# vendored 第三方头文件（仓库内随 git 走）
+# ============================================
+# 只放 header-only 的库：它们没有构建产物，进仓库零成本，且不受"容器一重建
+# 就没了"的影响。需要链接的库仍然装到容器里的 /usr/local/third（见 dockerfile）。
+#
+# 注意 CMAKE_SOURCE_DIR 是 src/，仓库根是它的上一级。
+set(THIRD_PARTY_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../third")
+if(NOT EXISTS "${THIRD_PARTY_INCLUDE_DIR}")
+    message(FATAL_ERROR "vendored third-party directory not found: ${THIRD_PARTY_INCLUDE_DIR}")
+endif()
+message(STATUS "Vendored third-party include dir: ${THIRD_PARTY_INCLUDE_DIR}")
+
+# ============================================
 # 查找 MySQL 客户端库
 # ============================================
 find_path(MYSQL_INCLUDE_DIR mysql.h

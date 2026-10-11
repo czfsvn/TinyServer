@@ -90,32 +90,66 @@ namespace cncpp
 
         try
         {
-            // 按 data_ 的实际类型选发送重载，message_id 沿用入站帧的 id：
-            // 帧头的 format_ 与 body 的语义必须一致，否则对端解不开。
-            const uint32_t message_id = message.header_.message_id_;
-
-            if (message.isProtobuf())
+            // 按帧头的 format_ 选发送重载：帧头格式与 body 语义必须一致，
+            // 否则对端解不开。body 里已经带着类型标识前缀（裸结构体的 msgindex /
+            // protobuf 的 msgname），发送路径不再重新拼。
+            switch (message.format())
             {
-                const google::protobuf::Message* proto = message.getProtobuf();
-                if (!proto)
+                case cncpp::PayloadFormat::kProtobuf:
                 {
-                    LOG_WARN("TcpTask drop message with null protobuf, task_id: {}", task_id_);
-                    return false;
+                    const google::protobuf::Message* proto = message.getProtobuf();
+                    if (!proto)
+                    {
+                        LOG_WARN("TcpTask drop message with null protobuf, task_id: {}", task_id_);
+                        return false;
+                    }
+                    // msgname 由 sendProtoMsg 从 *proto 自身推导：收帧时它就是被
+                    // 这个全限定名查出来构造的，两者必然相同。
+                    session_->sendProtoMsg(*proto);
+                    break;
                 }
-                session_->send(*proto, message_id);
-            }
-            else if (const std::string* body = message.getBody())
-            {
-                session_->send(*body, message_id, message.header_.format_);
-            }
-            else
-            {
-                LOG_WARN("TcpTask drop empty message, task_id: {}, message_id: {}", task_id_, message_id);
-                return false;
+
+                case cncpp::PayloadFormat::kRawStruct:
+                {
+                    const std::string* body = message.getBody();
+                    if (!body || body->empty())
+                    {
+                        LOG_WARN("TcpTask drop empty raw message, task_id: {}", task_id_);
+                        return false;
+                    }
+                    session_->send(cncpp::Session::makeSharedPayload(*body), cncpp::PayloadFormat::kRawStruct);
+                    break;
+                }
+
+                default:
+                    LOG_WARN("TcpTask drop message with unsupported format, task_id: {}", task_id_);
+                    return false;
             }
 
             updateLastActiveTime();
 
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            LOG_ERROR("TcpTask failed to send message, task_id: {}, error: {}", task_id_, e.what());
+            return false;
+        }
+    }
+
+    bool TcpTask::sendRawStructFrame(uint32_t msg_index, const void* struct_bytes, size_t size)
+    {
+        if (!session_ || !session_->isOpen())
+        {
+            LOG_ERROR("TcpTask not connected, cannot send message, task_id: {}", task_id_);
+            return false;
+        }
+
+        try
+        {
+            // 前缀（msgindex 的字节序与宽度）由 Session::sendRawStruct 拼，这里不碰。
+            session_->sendRawStruct(msg_index, struct_bytes, size);
+            updateLastActiveTime();
             return true;
         }
         catch (const std::exception& e)

@@ -66,7 +66,7 @@ namespace cncpp
                 interval_ms_.store(sMainConfig.main_loop_interval_ms(), std::memory_order_relaxed);
                 if (interval_ms_.load(std::memory_order_relaxed) == 0)
                 {
-                    interval_ms_.store(kDefaultIntervalMs, std::memory_order_relaxed);
+                    interval_ms_.store(DEFAULT_MAIN_LOOP_INTERVAL_MS, std::memory_order_relaxed);
                 }
             }
 
